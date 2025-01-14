@@ -1,12 +1,9 @@
 import { Client, Collection, GatewayIntentBits } from 'discord.js';
-import { config } from 'dotenv';
 import { loadCommands } from './handlers/commandHandler.js';
 import { loadEvents } from './handlers/eventHandler.js';
 import { Command } from './types';
 import { ElevenLabsConversationalAI } from './api/elevenlabs/conversationalClient.js';
 import { logger } from './config/logger.js';
-
-config();
 
 declare module 'discord.js' {
   export interface Client {
@@ -28,6 +25,9 @@ client.commands = new Collection();
 
 const init = async () => {
   try {
+    console.log('Bot Token:', process.env.BOT_TOKEN ? 'Set' : 'Not Set');
+    console.log('ElevenLabs API Key:', process.env.ELEVENLABS_API_KEY ? 'Set' : 'Not Set');
+
     // Initialize commands and events
     await loadCommands(client);
     await loadEvents(client);
@@ -40,7 +40,7 @@ const init = async () => {
     }
 
     // Login to Discord
-    await client.login(process.env.DISCORD_TOKEN);
+    await client.login(process.env.BOT_TOKEN);
     
     logger.info(`Bot is ready! Logged in as ${client.user?.tag}`);
   } catch (error) {
