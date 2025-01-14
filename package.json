@@ -15,7 +15,7 @@
     "lint:fix": "eslint . --fix --cache"
   },
   "dependencies": {
-    "@discordjs/opus": "^0.9.0",
+    "@discordjs/opus": "^0.9.0 --build-from-source",
     "@discordjs/voice": "^0.18.0",
     "@types/node": "^20.10.0",
     "bufferutil": "^4.0.8",
