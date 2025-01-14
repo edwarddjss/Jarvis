@@ -26,8 +26,8 @@ client.commands = new Collection();
 
 const init = async () => {
   try {
-    console.log('Bot Token:', DISCORD_CONFIG.DISCORD_BOT_TOKEN ? 'Set' : 'Not Set');
-    console.log('ElevenLabs Agent ID:', ELEVENLABS_CONFIG.AGENT_ID ? 'Set' : 'Not Set');
+    console.log('DISCORD_BOT_TOKEN length:', DISCORD_CONFIG.DISCORD_BOT_TOKEN?.length);
+    console.log('AGENT_ID length:', ELEVENLABS_CONFIG.AGENT_ID?.length);
 
     // Initialize commands and events
     await loadCommands(client);
@@ -38,6 +38,13 @@ const init = async () => {
       logger.error('AGENT_ID is not set in environment variables');
     } else {
       logger.info('Initializing voice capabilities...');
+      client.voiceManager = new ElevenLabsConversationalAI(/* pass necessary parameters */);
+      try {
+        await client.voiceManager.connect();
+        logger.info('Voice capabilities initialized successfully');
+      } catch (error) {
+        logger.error('Failed to initialize voice capabilities:', error);
+      }
     }
 
     // Login to Discord
@@ -46,6 +53,10 @@ const init = async () => {
     logger.info(`Bot is ready! Logged in as ${client.user?.tag}`);
   } catch (error) {
     console.error('Error initializing bot:', error);
+    if (error instanceof Error) {
+      console.error('Error message:', error.message);
+      console.error('Error stack:', error.stack);
+    }
   }
 };
 
