@@ -141,7 +141,6 @@ export class ElevenLabsConversationalAI {
     while (this.audioBufferQueue.length > 0) {
       const audioBuffer = this.audioBufferQueue.shift();
       
-      // Detailed logging of buffer state
       logger.info(`Processing audio buffer. Queue size: ${this.audioBufferQueue.length}`);
       
       if (!audioBuffer) {
@@ -150,12 +149,23 @@ export class ElevenLabsConversationalAI {
       }
 
       try {
-        // More detailed buffer information
         logger.info(`Buffer details - Length: ${audioBuffer.length}, Type: ${typeof audioBuffer}`);
 
         this.initializeAudioStream();
         
-        const pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(audioBuffer);
+        let pcmBuffer;
+        try {
+          pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(audioBuffer);
+        } catch (conversionError) {
+          logger.error('FFmpeg conversion error:', {
+            errorMessage: conversionError instanceof Error ? conversionError.message : 'Unknown error',
+            errorStack: conversionError instanceof Error ? conversionError.stack : 'No stack trace',
+            bufferLength: audioBuffer.length,
+            bufferType: typeof audioBuffer,
+            bufferData: audioBuffer.toString('base64').slice(0, 100) // First 100 chars of base64 for context
+          });
+          continue;
+        }
         
         if (!pcmBuffer) {
           logger.error('Conversion resulted in null buffer');
@@ -167,7 +177,6 @@ export class ElevenLabsConversationalAI {
           continue;
         }
 
-        // Attempt to write buffer with additional error handling
         try {
           const writeResult = this.currentAudioStream?.write(pcmBuffer);
           if (writeResult === false) {
@@ -178,7 +187,7 @@ export class ElevenLabsConversationalAI {
         }
 
       } catch (error) {
-        logger.error('Comprehensive error processing audio buffer:', {
+        logger.error('Unexpected error in audio processing:', {
           errorMessage: error instanceof Error ? error.message : 'Unknown error',
           errorStack: error instanceof Error ? error.stack : 'No stack trace',
           bufferLength: audioBuffer.length,
