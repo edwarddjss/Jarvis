@@ -136,11 +136,26 @@ export class ElevenLabsConversationalAI {
     this.isProcessing = true;
 
     while (this.audioBufferQueue.length > 0) {
-      const audioBuffer = this.audioBufferQueue.shift()!;
+      const audioBuffer = this.audioBufferQueue.shift();
+      
+      // Skip if buffer is undefined or null
+      if (!audioBuffer) {
+        logger.error('Encountered undefined or null audio buffer');
+        continue;
+      }
+
       try {
         this.initializeAudioStream();
+        
+        // Ensure audioBuffer is a valid Buffer
         const pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(audioBuffer);
-        this.currentAudioStream?.write(pcmBuffer);
+        
+        // Only write if pcmBuffer is not empty
+        if (pcmBuffer && pcmBuffer.length > 0) {
+          this.currentAudioStream?.write(pcmBuffer);
+        } else {
+          logger.error('Received empty PCM buffer');
+        }
       } catch (error) {
         logger.error('Error processing audio buffer:', error);
       }
