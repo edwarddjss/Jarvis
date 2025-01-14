@@ -11,7 +11,7 @@ const presetColors: Record<PresetType, ColorResolvable> = {
 
 /**
  * Creates an embed message.
- * @param {string} title - The title of the embed.
+ * @param {string} title - The title of the embed.yd
  * @param {string} [description] - The description of the embed.
  * @param {PresetType} [type] - The preset type for the embed color.
  * @param {ColorResolvable} [color] - Custom color for the embed.
