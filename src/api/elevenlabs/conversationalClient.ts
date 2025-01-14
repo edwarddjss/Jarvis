@@ -1,7 +1,6 @@
 import { AudioPlayer, createAudioResource, StreamType } from '@discordjs/voice';
 import { PassThrough } from 'stream';
 import WebSocket from 'ws';
-import { ELEVENLABS_CONFIG } from '../../config/config.js';
 import { logger } from '../../config/index.js';
 import { AudioUtils } from '../../utils/index.js';
 import type { AgentResponseEvent, AudioEvent, UserTranscriptEvent } from './types.js';
@@ -22,7 +21,12 @@ export class ElevenLabsConversationalAI {
    * @param {AudioPlayer} audioPlayer - The audio player instance.
    */
   constructor(audioPlayer: AudioPlayer) {
-    this.url = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${ELEVENLABS_CONFIG.AGENT_ID}`;
+    // Ensure the agent ID is not an empty string
+    if (!process.env.AGENT_ID) {
+      throw new Error('AGENT_ID is not set');
+    }
+
+    this.url = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${process.env.AGENT_ID}`;
     this.audioPlayer = audioPlayer;
     this.socket = null;
     this.currentAudioStream = null;
