@@ -14,6 +14,11 @@ class AudioUtils {
    *
    */
   static async mono441kHzToStereo48kHz(inputBuffer: Buffer): Promise<Buffer> {
+    // Early return for null or empty buffers
+    if (!inputBuffer || inputBuffer.length === 0) {
+      return inputBuffer;
+    }
+
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
 
