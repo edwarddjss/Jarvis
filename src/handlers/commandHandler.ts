@@ -9,16 +9,26 @@ const __dirname = dirname(__filename);
 
 export async function loadCommands(client: Client) {
   const commandsPath = join(__dirname, '../commands');
-  const commandFiles = readdirSync(commandsPath).filter(file => 
+  const commandFiles = readdirSync(commandsPath).filter(file =>
     file.endsWith('.ts') || file.endsWith('.js')
   );
 
   for (const file of commandFiles) {
     const filePath = join(commandsPath, file);
-    const { default: command }: { default: Command } = await import(filePath);
-    console.log('Loaded command:', command);
-    if ('data' in command && 'execute' in command) {
-      client.commands.set(command.data.name, command);
+
+    try {
+      const { default: command }: { default: Command } = await import(filePath);
+      console.log(`Loaded command: ${file}`);
+      console.log(command);
+
+      if ('data' in command && 'execute' in command) {
+        client.commands.set(command.data.name, command);
+      } else {
+        console.error(`Invalid command structure in file: ${file}`);
+      }
+    } catch (error) {
+      console.error(`Error loading command from file: ${file}`);
+      console.error(error);
     }
   }
 }
