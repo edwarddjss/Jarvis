@@ -27,7 +27,7 @@ client.commands = new Collection();
 const init = async () => {
   try {
     console.log('Bot Token:', DISCORD_CONFIG.DISCORD_BOT_TOKEN ? 'Set' : 'Not Set');
-    console.log('ElevenLabs API Key:', ELEVENLABS_CONFIG.AGENT_ID ? 'Set' : 'Not Set');
+    console.log('ElevenLabs Agent ID:', ELEVENLABS_CONFIG.AGENT_ID ? 'Set' : 'Not Set');
 
     // Initialize commands and events
     await loadCommands(client);
@@ -35,7 +35,7 @@ const init = async () => {
 
     // Initialize voice functionality
     if (!ELEVENLABS_CONFIG.AGENT_ID) {
-      logger.error('ELEVENLABS_API_KEY is not set in environment variables');
+      logger.error('AGENT_ID is not set in environment variables');
     } else {
       logger.info('Initializing voice capabilities...');
     }
