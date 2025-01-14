@@ -26,6 +26,9 @@ export class ElevenLabsConversationalAI {
       throw new Error('AGENT_ID is not set');
     }
 
+    // Increase max listeners to prevent warnings
+    audioPlayer.setMaxListeners(20);
+
     this.url = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${process.env.AGENT_ID}`;
     this.audioPlayer = audioPlayer;
     this.socket = null;
@@ -138,26 +141,48 @@ export class ElevenLabsConversationalAI {
     while (this.audioBufferQueue.length > 0) {
       const audioBuffer = this.audioBufferQueue.shift();
       
-      // Skip if buffer is undefined or null
+      // Detailed logging of buffer state
+      logger.info(`Processing audio buffer. Queue size: ${this.audioBufferQueue.length}`);
+      
       if (!audioBuffer) {
         logger.error('Encountered undefined or null audio buffer');
         continue;
       }
 
       try {
+        // More detailed buffer information
+        logger.info(`Buffer details - Length: ${audioBuffer.length}, Type: ${typeof audioBuffer}`);
+
         this.initializeAudioStream();
         
-        // Ensure audioBuffer is a valid Buffer
         const pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(audioBuffer);
         
-        // Only write if pcmBuffer is not empty
-        if (pcmBuffer && pcmBuffer.length > 0) {
-          this.currentAudioStream?.write(pcmBuffer);
-        } else {
-          logger.error('Received empty PCM buffer');
+        if (!pcmBuffer) {
+          logger.error('Conversion resulted in null buffer');
+          continue;
         }
+
+        if (pcmBuffer.length === 0) {
+          logger.error('Conversion resulted in empty buffer');
+          continue;
+        }
+
+        // Attempt to write buffer with additional error handling
+        try {
+          const writeResult = this.currentAudioStream?.write(pcmBuffer);
+          if (writeResult === false) {
+            logger.error('Failed to write audio buffer to stream');
+          }
+        } catch (writeError) {
+          logger.error('Error writing audio buffer:', writeError);
+        }
+
       } catch (error) {
-        logger.error('Error processing audio buffer:', error);
+        logger.error('Comprehensive error processing audio buffer:', {
+          errorMessage: error instanceof Error ? error.message : 'Unknown error',
+          errorStack: error instanceof Error ? error.stack : 'No stack trace',
+          bufferLength: audioBuffer.length,
+        });
       }
     }
 
