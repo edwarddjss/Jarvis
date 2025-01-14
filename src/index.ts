@@ -4,7 +4,7 @@ import { loadEvents } from './handlers/eventHandler.js';
 import { Command } from './types';
 import { ElevenLabsConversationalAI } from './api/elevenlabs/conversationalClient.js';
 import { logger } from './config/logger.js';
-import { DISCORD_CONFIG, ELEVENLABS_CONFIG } from './config';
+import { DISCORD_CONFIG, ELEVENLABS_CONFIG } from './config/config.js';
 
 declare module 'discord.js' {
   export interface Client {
