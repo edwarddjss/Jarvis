@@ -1,4 +1,4 @@
-import { Client } from 'discord.js';
+import { Client, Collection } from 'discord.js';
 import { readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -8,6 +8,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 export async function loadCommands(client: Client) {
+  client.commands = new Collection<string, Command>();
   const commandsPath = join(__dirname, '../commands');
   const commandFiles = readdirSync(commandsPath).filter(file =>
     file.endsWith('.ts') || file.endsWith('.js')
@@ -17,12 +18,12 @@ export async function loadCommands(client: Client) {
     const filePath = join(commandsPath, file);
 
     try {
-      const { default: command }: { default: Command } = await import(filePath);
+      const commandModule = await import(filePath);
       console.log(`Loaded command: ${file}`);
-      console.log(command);
+      console.log(commandModule);
 
-      if ('data' in command && 'execute' in command) {
-        client.commands.set(command.data.name, command);
+      if ('data' in commandModule && 'execute' in commandModule) {
+        client.commands.set(commandModule.data.name, commandModule as Command);
       } else {
         console.error(`Invalid command structure in file: ${file}`);
       }

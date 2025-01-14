@@ -14,12 +14,23 @@ export async function loadEvents(client: Client) {
 
   for (const file of eventFiles) {
     const filePath = join(eventsPath, file);
-    const event = require(filePath).default;
     
-    if (event.once) {
-      client.once(event.name, (...args) => event.execute(...args));
-    } else {
-      client.on(event.name, (...args) => event.execute(...args));
+    try {
+      const eventModule = await import(filePath);
+      
+      if ('name' in eventModule && 'execute' in eventModule) {
+        if (eventModule.once) {
+          client.once(eventModule.name, (...args) => eventModule.execute(...args));
+        } else {
+          client.on(eventModule.name, (...args) => eventModule.execute(...args));
+        }
+        console.log(`Loaded event: ${file}`);
+      } else {
+        console.error(`Invalid event structure in file: ${file}`);
+      }
+    } catch (error) {
+      console.error(`Error loading event from file: ${file}`);
+      console.error(error);
     }
   }
 }

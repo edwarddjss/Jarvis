@@ -51,4 +51,4 @@ const command: Command = {
   }
 };
 
-export default command;
+export const { data, execute } = command;
