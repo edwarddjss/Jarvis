@@ -4,6 +4,7 @@ import { loadEvents } from './handlers/eventHandler.js';
 import { Command } from './types';
 import { ElevenLabsConversationalAI } from './api/elevenlabs/conversationalClient.js';
 import { logger } from './config/logger.js';
+import { DISCORD_CONFIG, ELEVENLABS_CONFIG } from './config';
 
 declare module 'discord.js' {
   export interface Client {
@@ -25,22 +26,22 @@ client.commands = new Collection();
 
 const init = async () => {
   try {
-    console.log('Bot Token:', process.env.BOT_TOKEN ? 'Set' : 'Not Set');
-    console.log('ElevenLabs API Key:', process.env.ELEVENLABS_API_KEY ? 'Set' : 'Not Set');
+    console.log('Bot Token:', DISCORD_CONFIG.BOT_TOKEN ? 'Set' : 'Not Set');
+    console.log('ElevenLabs API Key:', ELEVENLABS_CONFIG.AGENT_ID ? 'Set' : 'Not Set');
 
     // Initialize commands and events
     await loadCommands(client);
     await loadEvents(client);
 
     // Initialize voice functionality
-    if (!process.env.ELEVENLABS_API_KEY) {
+    if (!ELEVENLABS_CONFIG.AGENT_ID) {
       logger.error('ELEVENLABS_API_KEY is not set in environment variables');
     } else {
       logger.info('Initializing voice capabilities...');
     }
 
     // Login to Discord
-    await client.login(process.env.BOT_TOKEN);
+    await client.login(DISCORD_CONFIG.BOT_TOKEN);
     
     logger.info(`Bot is ready! Logged in as ${client.user?.tag}`);
   } catch (error) {
