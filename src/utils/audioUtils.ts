@@ -13,10 +13,25 @@ ffmpeg.setFfmpegPath(ffmpegPath);
  */
 class AudioUtils {
   private static audioEmitter: EventEmitter;
+  private static activeCommands: Set<ffmpeg.FfmpegCommand> = new Set();
 
   static {
     AudioUtils.audioEmitter = new EventEmitter();
-    AudioUtils.audioEmitter.setMaxListeners(20); // Increase the limit
+    AudioUtils.audioEmitter.setMaxListeners(20);
+  }
+
+  /**
+   * Safely kills all active FFmpeg commands
+   */
+  static cleanup() {
+    for (const command of AudioUtils.activeCommands) {
+      try {
+        command.kill('SIGTERM');
+      } catch (error) {
+        console.error('Error killing FFmpeg command:', error);
+      }
+    }
+    AudioUtils.activeCommands.clear();
   }
 
   /**
@@ -35,19 +50,14 @@ class AudioUtils {
       try {
         console.log(`Input buffer details - Length: ${inputBuffer.length}, First 10 bytes: ${inputBuffer.slice(0, 10).toString('hex')}`);
 
-        // Create input stream with explicit cleanup
         const inputStream = new Readable({
           read() {
             this.push(inputBuffer);
             this.push(null);
-          },
-          destroy(error, callback) {
-            cleanup();
-            callback(error);
           }
         });
 
-        let command = ffmpeg(inputStream)
+        const command = ffmpeg(inputStream)
           .inputFormat('s16le')
           .inputOptions([
             '-ar 44100',
@@ -60,12 +70,23 @@ class AudioUtils {
             '-ac 2',
             '-af', 'aresample=async=1:first_pts=0:min_hard_comp=0.100000:async=1000,aformat=sample_rates=48000:channel_layouts=stereo',
             '-f s16le'
-          ])
-          .on('start', (cmdline) => {
-            console.log(`FFmpeg command: ${cmdline}`);
-          })
-          .on('error', (err) => {
-            if (!isStreamClosed) {
+          ]);
+
+        // Track this command
+        AudioUtils.activeCommands.add(command);
+
+        command.on('start', (cmdline) => {
+          console.log(`FFmpeg command: ${cmdline}`);
+        });
+
+        command.on('error', (err) => {
+          if (!isStreamClosed) {
+            // Handle SIGKILL specifically
+            if (err.message.includes('SIGKILL')) {
+              console.log('FFmpeg process was killed, cleaning up...');
+              cleanup();
+              resolve(Buffer.alloc(0)); // Return empty buffer instead of rejecting
+            } else {
               console.error('FFmpeg conversion error:', {
                 message: err.message,
                 inputBufferLength: inputBuffer.length,
@@ -74,13 +95,12 @@ class AudioUtils {
               cleanup();
               reject(new Error(`FFmpeg error: ${err.message}`));
             }
-          });
+          }
+        });
 
         const outputStream = command.pipe();
-        
-        // Set max listeners for the output stream
         outputStream.setMaxListeners(20);
-        
+
         outputStream.on('data', chunk => {
           if (!isStreamClosed) {
             try {
@@ -97,14 +117,8 @@ class AudioUtils {
             try {
               const outputBuffer = Buffer.concat(chunks);
               console.log(`Output buffer details - Length: ${outputBuffer.length}, First 10 bytes: ${outputBuffer.slice(0, 10).toString('hex')}`);
-              
-              if (outputBuffer.length === 0) {
-                cleanup();
-                reject(new Error('Conversion resulted in empty buffer'));
-              } else {
-                cleanup();
-                resolve(outputBuffer);
-              }
+              cleanup();
+              resolve(outputBuffer);
             } catch (error) {
               cleanup();
               reject(error);
@@ -124,15 +138,28 @@ class AudioUtils {
         function cleanup() {
           if (!isStreamClosed) {
             isStreamClosed = true;
-            command.kill('SIGKILL');
-            inputStream.destroy();
-            outputStream.destroy();
             
+            // Remove from active commands
+            AudioUtils.activeCommands.delete(command);
+
+            try {
+              command.kill('SIGTERM');
+            } catch (error) {
+              console.error('Error killing FFmpeg command:', error);
+            }
+
+            try {
+              inputStream.destroy();
+              outputStream.destroy();
+            } catch (error) {
+              console.error('Error destroying streams:', error);
+            }
+
             // Remove all listeners
             inputStream.removeAllListeners();
             outputStream.removeAllListeners();
             command.removeAllListeners();
-            
+
             // Clear the chunks array
             chunks.length = 0;
           }
@@ -152,5 +179,20 @@ class AudioUtils {
     });
   }
 }
+
+// Add process-level handlers
+process.on('exit', () => {
+  AudioUtils.cleanup();
+});
+
+process.on('SIGTERM', () => {
+  AudioUtils.cleanup();
+  process.exit(0);
+});
+
+process.on('SIGINT', () => {
+  AudioUtils.cleanup();
+  process.exit(0);
+});
 
 export { AudioUtils };
