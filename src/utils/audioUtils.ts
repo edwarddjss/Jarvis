@@ -1,5 +1,12 @@
 import ffmpeg from 'fluent-ffmpeg';
+import ffmpegPath from 'ffmpeg-static';
 import { Readable } from 'stream';
+
+// Validate and set FFmpeg path
+if (ffmpegPath === null) {
+  throw new Error('ffmpeg-static path is null');
+}
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 /**
  * Utility class for audio processing operations.
@@ -11,7 +18,6 @@ class AudioUtils {
    * @param inputBuffer - The input PCM audio buffer in mono 44.1kHz format (signed 16-bit little-endian)
    * @returns Promise resolving to a Buffer containing stereo 48kHz PCM audio (signed 16-bit little-endian)
    * @throws {Error} If FFmpeg processing fails
-   *
    */
   static async mono441kHzToStereo48kHz(inputBuffer: Buffer): Promise<Buffer> {
     // Early return for null or empty buffers
