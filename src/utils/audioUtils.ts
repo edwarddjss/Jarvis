@@ -1,6 +1,5 @@
 import ffmpeg from 'fluent-ffmpeg';
 import { Readable } from 'stream';
-import { logger } from '../config/index.js';
 
 /**
  * Utility class for audio processing operations.
@@ -17,7 +16,7 @@ class AudioUtils {
   static async mono441kHzToStereo48kHz(inputBuffer: Buffer): Promise<Buffer> {
     // Early return for null or empty buffers
     if (!inputBuffer || inputBuffer.length === 0) {
-      logger.error('Received empty or null input buffer');
+      console.error('Received empty or null input buffer');
       return inputBuffer;
     }
 
@@ -26,18 +25,29 @@ class AudioUtils {
 
       try {
         // Log input buffer details
-        logger.info(`Input buffer details - Length: ${inputBuffer.length}, First 10 bytes: ${inputBuffer.slice(0, 10).toString('hex')}`);
+        console.log(`Input buffer details - Length: ${inputBuffer.length}, First 10 bytes: ${inputBuffer.slice(0, 10).toString('hex')}`);
 
-        ffmpeg(Readable.from(inputBuffer))
+        const inputStream = Readable.from(inputBuffer);
+
+        ffmpeg(inputStream)
           .inputFormat('s16le')
-          .inputOptions(['-ar 44100', '-ac 1', '-f s16le'])
+          .inputOptions([
+            '-ar 44100',   // Input sample rate
+            '-ac 1',       // Input channels (mono)
+            '-f s16le'     // Input format
+          ])
           .outputFormat('s16le')
-          .outputOptions(['-ar 48000', '-ac 2', '-af aresample=async=1:first_pts=0', '-f s16le'])
+          .outputOptions([
+            '-ar 48000',   // Output sample rate
+            '-ac 2',       // Output channels (stereo)
+            '-af', 'aresample=async=1:first_pts=0,aformat=sample_rates=48000:channel_layouts=stereo', 
+            '-f s16le'     // Output format
+          ])
           .on('start', (cmdline) => {
-            logger.info(`FFmpeg command: ${cmdline}`);
+            console.log(`FFmpeg command: ${cmdline}`);
           })
           .on('error', (err) => {
-            logger.error('FFmpeg conversion error:', {
+            console.error('FFmpeg conversion error:', {
               message: err.message,
               inputBufferLength: inputBuffer.length,
               inputBufferFirstBytes: inputBuffer.slice(0, 10).toString('hex')
@@ -50,21 +60,21 @@ class AudioUtils {
             const outputBuffer = Buffer.concat(chunks);
             
             // Log output buffer details
-            logger.info(`Output buffer details - Length: ${outputBuffer.length}, First 10 bytes: ${outputBuffer.slice(0, 10).toString('hex')}`);
+            console.log(`Output buffer details - Length: ${outputBuffer.length}, First 10 bytes: ${outputBuffer.slice(0, 10).toString('hex')}`);
             
             if (outputBuffer.length === 0) {
-              logger.error('Conversion resulted in empty buffer');
+              console.error('Conversion resulted in empty buffer');
               reject(new Error('Conversion resulted in empty buffer'));
             } else {
               resolve(outputBuffer);
             }
           })
           .on('error', (err) => {
-            logger.error('Pipe stream error:', err);
+            console.error('Pipe stream error:', err);
             reject(err);
           });
       } catch (error) {
-        logger.error('Unexpected error during audio conversion:', {
+        console.error('Unexpected error during audio conversion:', {
           message: error instanceof Error ? error.message : 'Unknown error',
           inputBufferLength: inputBuffer.length
         });
