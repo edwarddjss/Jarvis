@@ -18,3 +18,6 @@ export async function loadCommands(client: Client) {
     }
   }
 }
+/**
+ * Complete
+ */
