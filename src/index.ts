@@ -26,7 +26,7 @@ client.commands = new Collection();
 
 const init = async () => {
   try {
-    console.log('Bot Token:', DISCORD_CONFIG.BOT_TOKEN ? 'Set' : 'Not Set');
+    console.log('Bot Token:', DISCORD_CONFIG.DISCORD_BOT_TOKEN ? 'Set' : 'Not Set');
     console.log('ElevenLabs API Key:', ELEVENLABS_CONFIG.AGENT_ID ? 'Set' : 'Not Set');
 
     // Initialize commands and events
@@ -41,7 +41,7 @@ const init = async () => {
     }
 
     // Login to Discord
-    await client.login(DISCORD_CONFIG.BOT_TOKEN);
+    await client.login(DISCORD_CONFIG.DISCORD_BOT_TOKEN);
     
     logger.info(`Bot is ready! Logged in as ${client.user?.tag}`);
   } catch (error) {

@@ -61,4 +61,4 @@ import {
     logger.info(`Ready! Logged in as ${bot.user?.username}`);
   });
   
-  bot.login(DISCORD_CONFIG.BOT_TOKEN);
+  bot.login(DISCORD_CONFIG.DISCORD_BOT_TOKEN);

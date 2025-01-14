@@ -31,11 +31,11 @@ export async function deployCommands(): Promise<void> {
       commands.push(command.data.toJSON());
     }
 
-    const rest = new REST().setToken(DISCORD_CONFIG.BOT_TOKEN);
+    const rest = new REST().setToken(DISCORD_CONFIG.DISCORD_BOT_TOKEN);
 
     logger.info('Started refreshing application (/) commands.');
 
-    await rest.put(Routes.applicationCommands(DISCORD_CONFIG.CLIENT_ID), {
+    await rest.put(Routes.applicationCommands(DISCORD_CONFIG.DISCORD_CLIENT_ID), {
       body: commands,
     });
 

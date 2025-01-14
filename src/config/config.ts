@@ -9,8 +9,8 @@ function loadEnv(key: string): string {
 }
 
 export const DISCORD_CONFIG = {
-  BOT_TOKEN: loadEnv('DISCORD_BOT_TOKEN'),
-  CLIENT_ID: loadEnv('DISCORD_CLIENT_ID'),
+  DISCORD_BOT_TOKEN: loadEnv('DISCORD_BOT_TOKEN'),
+  DISCORD_CLIENT_ID: loadEnv('DISCORD_CLIENT_ID'),
 };
 
 export const ELEVENLABS_CONFIG = {
