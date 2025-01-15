@@ -2,8 +2,7 @@
 import { 
     CommandInteraction, 
     GuildMember, 
-    SlashCommandBuilder, 
-    MessageFlags 
+    SlashCommandBuilder 
 } from 'discord.js';
 import { logger } from '../config/logger.js';
 import { Embeds } from '../utils/index.js';
@@ -18,9 +17,8 @@ export async function execute(interaction: CommandInteraction): Promise<void> {
         const member = interaction.member as GuildMember;
         
         if (!member?.voice?.channel) {
-            await interaction.reply({
-                content: 'You must be in a voice channel to use this command!',
-                flags: MessageFlags.Ephemeral
+            await interaction.editReply({
+                content: 'You must be in a voice channel to use this command!'
             });
             return;
         }
@@ -28,15 +26,13 @@ export async function execute(interaction: CommandInteraction): Promise<void> {
         const musicHandler = MusicHandler.getInstance();
         const enabled = musicHandler.toggleBassboost(interaction.guildId!);
 
-        await interaction.reply({
-            content: `🎵 Bass boost has been ${enabled ? 'enabled' : 'disabled'}`,
-            flags: MessageFlags.Ephemeral
+        await interaction.editReply({
+            content: `🎵 Bass boost has been ${enabled ? 'enabled' : 'disabled'}`
         });
     } catch (error) {
         logger.error(error, 'Error in bassboost command');
-        await interaction.reply({
-            content: 'An error occurred while toggling bass boost.',
-            flags: MessageFlags.Ephemeral
+        await interaction.editReply({
+            content: 'An error occurred while toggling bass boost.'
         });
     }
 }

@@ -5,8 +5,7 @@ import {
     TextChannel,
     NewsChannel,
     ThreadChannel,
-    SlashCommandBuilder,
-    MessageFlags
+    SlashCommandBuilder
 } from 'discord.js';
 import { VoiceConnectionHandler } from '../api/discord/voiceConnection.js';
 import { logger } from '../config/logger.js';
@@ -28,18 +27,16 @@ export async function execute(interaction: CommandInteraction): Promise<void> {
         const member = interaction.member as GuildMember;
         
         if (!member?.voice?.channel) {
-            await interaction.reply({
-                content: 'You must be in a voice channel to use this command!',
-                flags: MessageFlags.Ephemeral
+            await interaction.editReply({
+                content: 'You must be in a voice channel to use this command!'
             });
             return;
         }
 
         const channel = interaction.channel;
         if (!channel || !(channel instanceof TextChannel || channel instanceof ThreadChannel || channel instanceof NewsChannel)) {
-            await interaction.reply({
-                content: 'This command can only be used in text channels.',
-                flags: MessageFlags.Ephemeral
+            await interaction.editReply({
+                content: 'This command can only be used in text channels.'
             });
             return;
         }
@@ -49,6 +46,9 @@ export async function execute(interaction: CommandInteraction): Promise<void> {
         const connection = await connectionHandler.connect();
 
         if (!connection) {
+            await interaction.editReply({
+                content: 'Failed to establish voice connection.'
+            });
             return;
         }
 
@@ -61,15 +61,13 @@ export async function execute(interaction: CommandInteraction): Promise<void> {
             member.user.tag
         );
 
-        await interaction.reply({
-            content: '🎵 Added track to queue',
-            flags: MessageFlags.Ephemeral
+        await interaction.editReply({
+            content: '🎵 Added track to queue'
         });
     } catch (error) {
         logger.error(error, 'Error in play command');
-        await interaction.reply({
-            content: 'An error occurred while playing the audio.',
-            flags: MessageFlags.Ephemeral
+        await interaction.editReply({
+            content: 'An error occurred while playing the audio.'
         });
     }
 }
