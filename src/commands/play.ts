@@ -42,7 +42,7 @@ export async function execute(interaction: CommandInteraction): Promise<void> {
         }
 
         const url = interaction.options.get('url')?.value as string;
-        const connectionHandler = new VoiceConnectionHandler(interaction);
+        const connectionHandler = new VoiceConnectionHandler(interaction, true); // Set isForMusic to true
         const connection = await connectionHandler.connect();
 
         if (!connection) {

@@ -30,13 +30,16 @@ class VoiceConnectionHandler {
   private consecutiveNoiseFrames: number = 0;
   private readonly REQUIRED_NOISE_FRAMES = 3; // Number of consecutive frames needed to confirm speech
   private currentConnection: VoiceConnection | null = null;
+  private isForMusic: boolean = false;
 
   /**
    * Creates an instance of VoiceConnectionHandler.
    * @param {CommandInteraction} interaction - The command interaction from Discord.
+   * @param {boolean} isForMusic - Whether this connection is for music playback
    */
-  constructor(interaction: CommandInteraction) {
+  constructor(interaction: CommandInteraction, isForMusic: boolean = false) {
       this.interaction = interaction;
+      this.isForMusic = isForMusic;
   }
 
   /**
@@ -50,7 +53,6 @@ class VoiceConnectionHandler {
   async connect(): Promise<VoiceConnection | null> {
       try {
           if (!this.isUserInVoiceChannel()) {
-              // Only reply if the interaction hasn't been replied to already
               if (!this.interaction.replied && !this.interaction.deferred) {
                   await this.interaction.reply({
                       embeds: [Embeds.error('Error', 'You need to be in a voice channel to use this command.')],
@@ -62,7 +64,6 @@ class VoiceConnectionHandler {
 
           const existingConnection = getVoiceConnection(this.interaction.guildId!);
           if (existingConnection) {
-              // Only reply if the interaction hasn't been replied to already
               if (!this.interaction.replied && !this.interaction.deferred) {
                   await this.interaction.reply({
                       embeds: [Embeds.error('Error', 'Bot is already in a voice channel.')],
@@ -77,20 +78,24 @@ class VoiceConnectionHandler {
               channelId: member.voice.channel!.id,
               guildId: this.interaction.guildId!,
               adapterCreator: member.guild.voiceAdapterCreator,
-              selfDeaf: false,
+              selfDeaf: this.isForMusic, // Deaf for music, not deaf for speech
               selfMute: false,
           });
 
           try {
-              // Wait for the connection to be ready
               await entersState(connection, VoiceConnectionStatus.Ready, 20_000);
               this.currentConnection = connection;
-              this.setupConnectionHandlers(connection);
+              
+              if (this.isForMusic) {
+                  this.setupMusicConnectionHandlers(connection);
+              } else {
+                  this.setupSpeechConnectionHandlers(connection);
+              }
 
-              // Only reply if the interaction hasn't been replied to already
               if (!this.interaction.replied && !this.interaction.deferred) {
+                  const message = this.isForMusic ? '🎵 Ready to play music!' : "Let's chat!";
                   await this.interaction.reply({
-                      embeds: [Embeds.success('Connected', "Let's chat!")],
+                      embeds: [Embeds.success('Connected', message)],
                       ephemeral: true
                   });
               }
@@ -99,10 +104,8 @@ class VoiceConnectionHandler {
               connection.destroy();
               throw error;
           }
-
       } catch (error) {
           logger.error(error, 'Error connecting to voice channel');
-          // Only reply if the interaction hasn't been replied to already
           if (!this.interaction.replied && !this.interaction.deferred) {
               await this.interaction.reply({
                   embeds: [Embeds.error('Error', 'An error occurred while connecting to the voice channel.')],
@@ -123,7 +126,25 @@ class VoiceConnectionHandler {
              this.interaction.member.voice.channel !== null;
   }
 
-  private setupConnectionHandlers(connection: VoiceConnection) {
+  private setupMusicConnectionHandlers(connection: VoiceConnection) {
+      connection.on(VoiceConnectionStatus.Disconnected, async () => {
+          try {
+              await Promise.race([
+                  entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+                  entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+              ]);
+          } catch (error) {
+              connection.destroy();
+              this.currentConnection = null;
+          }
+      });
+
+      connection.on(VoiceConnectionStatus.Destroyed, () => {
+          this.currentConnection = null;
+      });
+  }
+
+  private setupSpeechConnectionHandlers(connection: VoiceConnection) {
       connection.receiver.speaking.on('start', (userId) => {
           this.handleAudioStart(userId);
       });
@@ -132,7 +153,6 @@ class VoiceConnectionHandler {
           this.handleAudioEnd(userId);
       });
 
-      // Handle connection state changes
       connection.on(VoiceConnectionStatus.Disconnected, async () => {
           try {
               await Promise.race([
@@ -149,7 +169,6 @@ class VoiceConnectionHandler {
           this.currentConnection = null;
       });
 
-      // Subscribe to audio streams
       connection.receiver.speaking.on('start', (userId) => {
           const audioStream = connection.receiver.subscribe(userId);
           this.handleAudioStream(audioStream);

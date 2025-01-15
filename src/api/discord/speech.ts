@@ -3,6 +3,7 @@ import { AudioReceiveStream, EndBehaviorType, VoiceConnection } from '@discordjs
 import { logger } from '../../config/index.js';
 import { ElevenLabsConversationalAI } from '../index.js';
 import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
+import { EventEmitter } from 'events';
 
 /**
  * Handles speech processing for users in a voice channel.
@@ -41,8 +42,9 @@ class SpeechHandler {
         throw new Error('Cannot start speech while music is playing. Please stop the music first.');
       }
 
-      // Set state to speech
+      // Set state to speech BEFORE connecting
       this.stateManager.setVoiceState(this.guildId, VoiceActivityType.SPEECH);
+      logger.info(`Initialized speech mode for guild ${this.guildId}`);
 
       await this.client.connect();
 
@@ -56,6 +58,9 @@ class SpeechHandler {
           this.cleanup();
         }
       });
+
+      // Set max listeners to prevent warnings
+      (this.connection.receiver as unknown as EventEmitter).setMaxListeners(20);
     } catch (error) {
       this.stateManager.clearState(this.guildId);
       logger.error(error, 'Error initializing speech handler');
@@ -70,7 +75,11 @@ class SpeechHandler {
    * @returns {void}
    */
   private handleUserSpeaking(userId: string, connection: VoiceConnection): void {
-    if (this.speakingUsers.has(userId)) return;
+    logger.debug(`User ${userId} started speaking in guild ${this.guildId}`);
+    if (this.speakingUsers.has(userId)) {
+      logger.debug(`User ${userId} already has an audio stream, skipping`);
+      return;
+    }
 
     this.createUserAudioStream(userId, connection);
   }
@@ -126,7 +135,11 @@ class SpeechHandler {
    * @returns {void}
    */
   private cleanup(): void {
-    this.speakingUsers.forEach((stream) => stream.destroy());
+    logger.info(`Cleaning up speech handler for guild ${this.guildId}`);
+    this.speakingUsers.forEach((stream) => {
+      stream.removeAllListeners();
+      stream.destroy();
+    });
     this.speakingUsers.clear();
     this.client.disconnect();
     this.stateManager.clearState(this.guildId);

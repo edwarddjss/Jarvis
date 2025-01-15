@@ -87,6 +87,12 @@ export class MusicHandler {
             });
 
             connection.on(VoiceConnectionStatus.Disconnected, () => {
+                logger.info(`Voice connection disconnected in guild ${guildId}`);
+                this.cleanup(guildId);
+            });
+
+            connection.on(VoiceConnectionStatus.Destroyed, () => {
+                logger.info(`Voice connection destroyed in guild ${guildId}`);
                 this.cleanup(guildId);
             });
 
@@ -105,15 +111,16 @@ export class MusicHandler {
         requestedBy: string
     ): Promise<void> {
         try {
-            const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
-
             // Check if AI is currently speaking
             if (this.stateManager.isSpeaking(guildId)) {
                 throw new Error('Cannot play music while AI is speaking. Please wait a moment and try again.');
             }
 
-            // Set state to music
+            const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
+
+            // Set state to music before starting playback
             this.stateManager.setVoiceState(guildId, VoiceActivityType.MUSIC);
+            logger.info(`Starting music playback in guild ${guildId}`);
 
             const videoInfo = await video_info(url);
             const video = videoInfo.video_details;
@@ -220,6 +227,7 @@ export class MusicHandler {
     }
 
     private cleanup(guildId: string): void {
+        logger.info(`Cleaning up music handler for guild ${guildId}`);
         const guildData = this.queues.get(guildId);
         if (!guildData) return;
 
@@ -227,8 +235,10 @@ export class MusicHandler {
             clearTimeout(guildData.timeout);
         }
 
+        guildData.audioPlayer.removeAllListeners();
         guildData.audioPlayer.stop(true);
         guildData.connection.destroy();
+        this.stateManager.clearState(guildId);
         this.queues.delete(guildId);
     }
 
