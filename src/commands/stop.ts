@@ -1,5 +1,10 @@
 // src/commands/stop.ts
-import { CommandInteraction, GuildMember, SlashCommandBuilder } from 'discord.js';
+import { 
+    CommandInteraction, 
+    GuildMember, 
+    SlashCommandBuilder, 
+    MessageFlags 
+} from 'discord.js';
 import { logger } from '../config/logger.js';
 import { Embeds } from '../utils/index.js';
 import { MusicHandler } from '../api/discord/musicHandler.js';
@@ -10,12 +15,12 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: CommandInteraction): Promise<void> {
     try {
-        await interaction.deferReply();
         const member = interaction.member as GuildMember;
-
+        
         if (!member?.voice?.channel) {
-            await interaction.editReply({
-                embeds: [Embeds.error('Voice Channel Required', 'You must be in a voice channel to use this command!')],
+            await interaction.reply({
+                content: 'You must be in a voice channel to use this command!',
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
@@ -23,13 +28,15 @@ export async function execute(interaction: CommandInteraction): Promise<void> {
         const musicHandler = MusicHandler.getInstance();
         musicHandler.stop(interaction.guildId!);
 
-        await interaction.editReply({
-            embeds: [Embeds.success('Stopped', '⏹️ Playback has been stopped.')],
+        await interaction.reply({
+            content: '⏹️ Playback has been stopped.',
+            flags: MessageFlags.Ephemeral
         });
     } catch (error) {
         logger.error(error, 'Error in stop command');
-        await interaction.editReply({
-            embeds: [Embeds.error('Error', 'An error occurred while stopping the playback.')],
+        await interaction.reply({
+            content: 'An error occurred while stopping the playback.',
+            flags: MessageFlags.Ephemeral
         });
     }
 }

@@ -1,5 +1,10 @@
 // src/commands/clearfilters.ts
-import { CommandInteraction, GuildMember, SlashCommandBuilder } from 'discord.js';
+import { 
+    CommandInteraction, 
+    GuildMember, 
+    SlashCommandBuilder, 
+    MessageFlags 
+} from 'discord.js';
 import { logger } from '../config/logger.js';
 import { Embeds } from '../utils/index.js';
 import { MusicHandler } from '../api/discord/musicHandler.js';
@@ -10,12 +15,12 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: CommandInteraction): Promise<void> {
     try {
-        await interaction.deferReply();
         const member = interaction.member as GuildMember;
-
+        
         if (!member?.voice?.channel) {
-            await interaction.editReply({
-                embeds: [Embeds.error('Voice Channel Required', 'You must be in a voice channel to use this command!')],
+            await interaction.reply({
+                content: 'You must be in a voice channel to use this command!',
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
@@ -23,13 +28,15 @@ export async function execute(interaction: CommandInteraction): Promise<void> {
         const musicHandler = MusicHandler.getInstance();
         musicHandler.clearFilters(interaction.guildId!);
 
-        await interaction.editReply({
-            embeds: [Embeds.success('Filters Cleared', '🎵 All audio filters have been cleared')],
+        await interaction.reply({
+            content: '🎵 All audio filters have been cleared',
+            flags: MessageFlags.Ephemeral
         });
     } catch (error) {
         logger.error(error, 'Error in clearfilters command');
-        await interaction.editReply({
-            embeds: [Embeds.error('Error', 'An error occurred while clearing filters.')],
+        await interaction.reply({
+            content: 'An error occurred while clearing filters.',
+            flags: MessageFlags.Ephemeral
         });
     }
 }

@@ -5,7 +5,8 @@ import {
     TextChannel,
     NewsChannel,
     ThreadChannel,
-    SlashCommandBuilder 
+    SlashCommandBuilder,
+    MessageFlags
 } from 'discord.js';
 import { VoiceConnectionHandler } from '../api/discord/voiceConnection.js';
 import { logger } from '../config/logger.js';
@@ -24,20 +25,21 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction: CommandInteraction): Promise<void> {
     try {
-        await interaction.deferReply();
         const member = interaction.member as GuildMember;
         
         if (!member?.voice?.channel) {
-            await interaction.editReply({
-                embeds: [Embeds.error('Voice Channel Required', 'You must be in a voice channel to use this command!')],
+            await interaction.reply({
+                content: 'You must be in a voice channel to use this command!',
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
 
         const channel = interaction.channel;
         if (!channel || !(channel instanceof TextChannel || channel instanceof ThreadChannel || channel instanceof NewsChannel)) {
-            await interaction.editReply({
-                embeds: [Embeds.error('Error', 'This command can only be used in text channels.')],
+            await interaction.reply({
+                content: 'This command can only be used in text channels.',
+                flags: MessageFlags.Ephemeral
             });
             return;
         }
@@ -59,13 +61,15 @@ export async function execute(interaction: CommandInteraction): Promise<void> {
             member.user.tag
         );
 
-        await interaction.editReply({
-            embeds: [Embeds.success('Added to Queue', `🎵 Added track to queue`)],
+        await interaction.reply({
+            content: '🎵 Added track to queue',
+            flags: MessageFlags.Ephemeral
         });
     } catch (error) {
         logger.error(error, 'Error in play command');
-        await interaction.editReply({
-            embeds: [Embeds.error('Error', 'An error occurred while playing the audio.')],
+        await interaction.reply({
+            content: 'An error occurred while playing the audio.',
+            flags: MessageFlags.Ephemeral
         });
     }
 }
