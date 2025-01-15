@@ -23,8 +23,11 @@ export const data = new SlashCommandBuilder()
     );
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
+    if (!interaction.deferred && !interaction.replied) {
+        await interaction.deferReply();
+    }
+
     try {
-        await interaction.deferReply({ ephemeral: true });
         const member = interaction.member as GuildMember;
         
         if (!member?.voice?.channel) {
@@ -58,39 +61,42 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         // Check if the input is a Spotify URL
         const isSpotifyUrl = query.includes('spotify.com');
         
-        if (isSpotifyUrl) {
+        try {
+            if (isSpotifyUrl) {
+                await interaction.editReply({
+                    content: '🎵 Adding track to queue...'
+                });
+                await musicHandler.addSpotifyTrack(
+                    interaction.guildId!,
+                    connection,
+                    channel,
+                    query,
+                    member.user.username
+                );
+            } else {
+                await interaction.editReply({
+                    content: '🔍 Searching Spotify...'
+                });
+                await musicHandler.searchAndShowResults(
+                    interaction.guildId!,
+                    connection,
+                    channel,
+                    query,
+                    member.user.username
+                );
+            }
+        } catch (error) {
+            logger.error('Error in music handler:', error);
             await interaction.editReply({
-                content: '🎵 Adding track to queue...'
-            });
-            await musicHandler.addSpotifyTrack(
-                interaction.guildId!,
-                connection,
-                channel,
-                query,
-                member.user.username
-            );
-            await interaction.editReply({
-                content: '✅ Track added to queue!'
-            });
-        } else {
-            await interaction.editReply({
-                content: '🔍 Searching Spotify...'
-            });
-            await musicHandler.searchAndShowResults(
-                interaction.guildId!,
-                connection,
-                channel,
-                query,
-                member.user.username
-            );
-            await interaction.editReply({
-                content: '✅ Check the results below!'
+                content: '❌ Failed to process music request. Please try again.'
             });
         }
     } catch (error) {
-        logger.error(error);
-        await interaction.editReply({
-            content: '❌ An error occurred while processing your request.'
-        });
+        logger.error('Error in play command:', error);
+        if (!interaction.replied) {
+            await interaction.editReply({
+                content: '❌ An error occurred while processing your request.'
+            });
+        }
     }
 }

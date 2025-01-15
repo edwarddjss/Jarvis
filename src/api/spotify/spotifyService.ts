@@ -15,6 +15,9 @@ interface SpotifyTrack {
     external_urls: {
         spotify: string;
     };
+    album?: {
+        images: Array<{ url: string }>;
+    };
 }
 
 export class SpotifyService {
@@ -71,16 +74,45 @@ export class SpotifyService {
         return this.accessToken!;
     }
 
+    private extractTrackId(url: string): string | null {
+        try {
+            if (url.includes('spotify.com/track/')) {
+                const match = url.match(/track\/([a-zA-Z0-9]+)/);
+                return match ? match[1] : null;
+            }
+            return null;
+        } catch (error) {
+            logger.error('Error extracting track ID:', error);
+            return null;
+        }
+    }
+
     public async searchTracks(query: string): Promise<SpotifyTrack[]> {
         try {
             const token = await this.ensureValidToken();
+
+            // Check if it's a Spotify URL
+            const trackId = this.extractTrackId(query);
+            if (trackId) {
+                const response = await axios.get<SpotifyTrack>(
+                    `https://api.spotify.com/v1/tracks/${trackId}`,
+                    {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    }
+                );
+                return [response.data];
+            }
+
+            // Regular search
             const response = await axios.get<{ tracks: { items: SpotifyTrack[] } }>(
                 `https://api.spotify.com/v1/search`,
                 {
                     params: {
                         q: query,
                         type: 'track',
-                        limit: 10
+                        limit: 5
                     },
                     headers: {
                         'Authorization': `Bearer ${token}`
@@ -90,7 +122,7 @@ export class SpotifyService {
 
             return response.data.tracks.items;
         } catch (error) {
-            logger.error(error, 'Failed to search Spotify tracks');
+            logger.error('Failed to search Spotify tracks:', error);
             throw error;
         }
     }
