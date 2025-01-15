@@ -83,13 +83,20 @@ class SpeechHandler {
    */
   private async createUserAudioStream(userId: string, connection: VoiceConnection): Promise<void> {
     try {
+      logger.info(`Creating audio stream for user ${userId} in guild ${this.guildId}`);
+      
       const opusAudioStream: AudioReceiveStream = connection.receiver.subscribe(userId, {
         end: { behavior: EndBehaviorType.Manual },
       });
 
       this.speakingUsers.set(userId, opusAudioStream);
+      logger.info(`Successfully subscribed to user ${userId}'s audio stream`);
 
       for await (const opusBuffer of opusAudioStream) {
+        if (this.stateManager.getVoiceState(this.guildId) !== VoiceActivityType.SPEECH) {
+          logger.warn(`Unexpected voice state while processing audio: ${this.stateManager.getVoiceState(this.guildId)}`);
+          continue;
+        }
         this.processAudio(opusBuffer);
       }
     } catch (error) {
@@ -104,6 +111,9 @@ class SpeechHandler {
    */
   private processAudio(opusBuffer: Buffer): void {
     try {
+      if (this.stateManager.getVoiceState(this.guildId) !== VoiceActivityType.SPEECH) {
+        return;
+      }
       const pcmBuffer = this.decoder.decode(opusBuffer);
       this.client.appendInputAudio(pcmBuffer);
     } catch (error) {

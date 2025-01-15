@@ -1,5 +1,7 @@
 // src/api/discord/voiceStateManager.ts
 
+import { logger } from '../../config/logger.js';
+
 export enum VoiceActivityType {
     NONE = 'none',
     MUSIC = 'music',
@@ -29,14 +31,18 @@ export class VoiceStateManager {
      * Sets the voice activity state for a guild
      */
     public setVoiceState(guildId: string, state: VoiceActivityType): void {
+        const previousState = this.getVoiceState(guildId);
         this.guildStates.set(guildId, state);
+        logger.info(`Voice state changed for guild ${guildId}: ${previousState} -> ${state}`);
     }
 
     /**
      * Gets the current voice activity state for a guild
      */
     public getVoiceState(guildId: string): VoiceActivityType {
-        return this.guildStates.get(guildId) || VoiceActivityType.NONE;
+        const state = this.guildStates.get(guildId) || VoiceActivityType.NONE;
+        logger.debug(`Current voice state for guild ${guildId}: ${state}`);
+        return state;
     }
 
     /**

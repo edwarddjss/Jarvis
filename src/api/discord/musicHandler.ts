@@ -236,10 +236,16 @@ export class MusicHandler {
         const guildData = this.queues.get(guildId);
         if (!guildData) return;
 
+        logger.info(`Stopping music playback in guild ${guildId}`);
         guildData.queue = [];
         guildData.audioPlayer.stop(true);
         guildData.currentItem = null;
         guildData.currentResource = null;
+        
+        // Clear the music state
+        this.stateManager.clearState(guildId);
+        logger.info(`Cleared music state for guild ${guildId}`);
+        
         this.startIdleTimeout(guildId);
     }
 
