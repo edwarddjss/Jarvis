@@ -8,10 +8,9 @@ import {
     AudioPlayerStatus,
     VoiceConnectionStatus,
     entersState,
-    NoSubscriberBehavior,
-    StreamType
+    NoSubscriberBehavior
 } from '@discordjs/voice';
-import ytdl from 'ytdl-core';
+import { stream, video_info, YouTubeStream } from 'play-dl';
 import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder } from 'discord.js';
 import { logger } from '../../config/logger.js';
 import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
@@ -168,14 +167,14 @@ export class MusicHandler {
             this.stateManager.setVoiceState(guildId, VoiceActivityType.MUSIC);
             logger.info(`Starting music playback in guild ${guildId}`);
 
-            const videoInfo = await ytdl.getBasicInfo(url);
-            const video = videoInfo.videoDetails;
+            const videoInfo = await video_info(url);
+            const video = videoInfo.video_details;
 
             const queueItem: QueueItem = {
                 url,
                 title: video.title ?? 'Unknown Title',
                 requestedBy,
-                duration: video.lengthSeconds
+                duration: video.durationInSec.toString()
             };
 
             guildData.queue.push(queueItem);
@@ -192,7 +191,7 @@ export class MusicHandler {
                         name: '🎵 Added to Queue',
                         iconURL: 'https://i.imgur.com/IbS3k6R.png'
                     })
-                    .setThumbnail(video.thumbnails[0].url)
+                    .setThumbnail(videoInfo.video_details.thumbnails[0].url)
                     .addFields(
                         { name: 'Duration', value: queueItem.duration, inline: true },
                         { name: 'Requested By', value: queueItem.requestedBy, inline: true },
@@ -256,16 +255,20 @@ export class MusicHandler {
                 }
             }
 
-            logger.info('Creating stream');
-            const stream = ytdl(nextTrack.url, {
-                filter: 'audioonly',
-                quality: 'highestaudio',
-                highWaterMark: 1 << 25
+            logger.info(`Starting stream for URL: ${nextTrack.url}`);
+            const audioStream = await stream(nextTrack.url, {
+                discordPlayerCompatibility: true,
+                quality: 2,  // Force high quality
+                seek: 0,
+                language: 'en'
             });
-            
+
+            const videoInfo = await video_info(nextTrack.url);
+            logger.info('Stream created successfully');
+
             logger.info('Creating audio resource');
-            guildData.currentResource = createAudioResource(stream, {
-                inputType: StreamType.Arbitrary,
+            guildData.currentResource = createAudioResource(audioStream.stream, {
+                inputType: audioStream.type,
                 inlineVolume: true,
                 silencePaddingFrames: 5
             });
@@ -326,7 +329,7 @@ export class MusicHandler {
                     name: '🎵 Now Playing',
                     iconURL: 'https://i.imgur.com/IbS3k6R.png'  // Music note icon
                 })
-                .setThumbnail((await ytdl.getBasicInfo(nextTrack.url)).videoDetails.thumbnails[0].url)
+                .setThumbnail((await video_info(nextTrack.url)).video_details.thumbnails[0].url)
                 .addFields(
                     { name: 'Duration', value: nextTrack.duration, inline: true },
                     { name: 'Requested By', value: nextTrack.requestedBy, inline: true }

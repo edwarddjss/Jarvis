@@ -6,6 +6,7 @@ import { ElevenLabsConversationalAI } from './api/elevenlabs/conversationalClien
 import { logger } from './config/logger.js';
 import { DISCORD_CONFIG, ELEVENLABS_CONFIG } from './config/config.js';
 import { initializePlayDl } from './config/playDlConfig.js';
+import './server.js';
 
 declare module 'discord.js' {
   export interface Client {
