@@ -459,4 +459,18 @@ export class MusicHandler {
 
         return guildData.filters.bassboost;
     }
+
+    public clearFilters(guildId: string): void {
+        const guildData = this.queues.get(guildId);
+        if (!guildData) return;
+
+        guildData.filters = {
+            bassboost: false,
+            volume: 1
+        };
+
+        if (guildData.currentResource?.volume) {
+            guildData.currentResource.volume.setVolume(1);
+        }
+    }
 }
