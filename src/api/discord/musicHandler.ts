@@ -10,10 +10,11 @@ import {
     entersState,
     NoSubscriberBehavior
 } from '@discordjs/voice';
-import { stream, video_info, YouTubeStream } from 'play-dl';
-import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder } from 'discord.js';
+import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } from 'discord.js';
 import { logger } from '../../config/logger.js';
 import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
+import { SpotifyService } from '../spotify/spotifyService.js';
+import { stream, type SpotifyTrack } from 'play-dl';
 
 type SendableChannel = TextChannel | NewsChannel | ThreadChannel | DMChannel;
 
@@ -22,6 +23,8 @@ interface QueueItem {
     title: string;
     requestedBy: string;
     duration: string;
+    thumbnail?: string;
+    artist?: string;
 }
 
 interface GuildQueueData {
@@ -43,10 +46,12 @@ export class MusicHandler {
     private queues: Map<string, GuildQueueData>;
     private readonly IDLE_TIMEOUT = 300000; // 5 minutes
     private stateManager: VoiceStateManager;
+    private spotifyService: SpotifyService;
 
     private constructor() {
         this.queues = new Map();
         this.stateManager = VoiceStateManager.getInstance();
+        this.spotifyService = SpotifyService.getInstance();
     }
 
     public static getInstance(): MusicHandler {
@@ -148,6 +153,122 @@ export class MusicHandler {
         return guildData;
     }
 
+    public async searchAndShowResults(
+        guildId: string,
+        connection: VoiceConnection,
+        textChannel: SendableChannel,
+        query: string,
+        requestedBy: string
+    ): Promise<void> {
+        try {
+            const tracks = await this.spotifyService.searchTracks(query);
+            
+            if (tracks.length === 0) {
+                const embed = new EmbedBuilder()
+                    .setColor('#FF0000')
+                    .setTitle('❌ No Results Found')
+                    .setDescription('No tracks found matching your search query.')
+                    .setTimestamp();
+                await textChannel.send({ embeds: [embed] });
+                return;
+            }
+
+            const embed = new EmbedBuilder()
+                .setColor('#1DB954')  // Spotify green
+                .setTitle('🎵 Search Results')
+                .setDescription('Select a track to play:')
+                .setTimestamp();
+
+            // Create buttons for each track
+            const buttons = tracks.slice(0, 5).map((track, index) => {
+                return new ButtonBuilder()
+                    .setCustomId(`play_${index}`)
+                    .setLabel(`${index + 1}. ${track.name} - ${track.artists[0].name}`)
+                    .setStyle(ButtonStyle.Primary);
+            });
+
+            // Split buttons into rows (max 5 buttons per row)
+            const rows = [];
+            for (let i = 0; i < buttons.length; i += 5) {
+                const row = new ActionRowBuilder<ButtonBuilder>()
+                    .addComponents(buttons.slice(i, i + 5));
+                rows.push(row);
+            }
+
+            const message = await textChannel.send({
+                embeds: [embed],
+                components: rows
+            });
+
+            // Create collector for button interactions
+            const collector = message.createMessageComponentCollector({
+                time: 30000 // 30 seconds timeout
+            });
+
+            collector.on('collect', async (interaction) => {
+                if (!interaction.isButton()) return;
+
+                const index = parseInt(interaction.customId.split('_')[1]);
+                const selectedTrack = tracks[index];
+
+                await interaction.deferUpdate();
+
+                // Add the track to queue
+                const queueItem: QueueItem = {
+                    url: selectedTrack.external_urls.spotify,
+                    title: selectedTrack.name,
+                    requestedBy: requestedBy,
+                    duration: this.spotifyService.formatTrackDuration(selectedTrack.duration_ms),
+                    artist: selectedTrack.artists[0].name
+                };
+
+                const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
+                guildData.queue.push(queueItem);
+
+                if (!guildData.currentItem) {
+                    await this.processQueue(guildId);
+                } else {
+                    const queuePosition = guildData.queue.length;
+                    const addedEmbed = new EmbedBuilder()
+                        .setColor('#1DB954')
+                        .setTitle(queueItem.title)
+                        .setDescription(`by ${queueItem.artist}`)
+                        .setURL(queueItem.url)
+                        .setAuthor({
+                            name: '🎵 Added to Queue',
+                            iconURL: 'https://i.imgur.com/IbS3k6R.png'
+                        })
+                        .addFields(
+                            { name: 'Duration', value: queueItem.duration, inline: true },
+                            { name: 'Requested By', value: queueItem.requestedBy, inline: true },
+                            { name: 'Position in Queue', value: `#${queuePosition}`, inline: true }
+                        )
+                        .setTimestamp();
+
+                    await textChannel.send({ embeds: [addedEmbed] });
+                }
+
+                collector.stop();
+            });
+
+            collector.on('end', () => {
+                // Remove buttons after timeout or selection
+                message.edit({ components: [] }).catch(error => 
+                    logger.error(error, 'Failed to remove buttons after collector end')
+                );
+            });
+
+        } catch (error) {
+            logger.error(error, `Error searching tracks in guild ${guildId}`);
+            const errorEmbed = new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('❌ Error')
+                .setDescription(error instanceof Error ? error.message : 'An error occurred while searching for tracks.')
+                .setTimestamp();
+            await textChannel.send({ embeds: [errorEmbed] });
+        }
+    }
+
     public async addTrack(
         guildId: string,
         connection: VoiceConnection,
@@ -155,65 +276,36 @@ export class MusicHandler {
         url: string,
         requestedBy: string
     ): Promise<void> {
+        const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
+        
         try {
-            // Check if AI is currently speaking
-            if (this.stateManager.isSpeaking(guildId)) {
-                throw new Error('Cannot play music while AI is speaking. Please wait a moment and try again.');
-            }
-
-            const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
-
-            // Set state to music before starting playback
-            this.stateManager.setVoiceState(guildId, VoiceActivityType.MUSIC);
-            logger.info(`Starting music playback in guild ${guildId}`);
-
-            const videoInfo = await video_info(url);
-            const video = videoInfo.video_details;
+            const audioStream = await stream(url);
+            const resource = createAudioResource(audioStream.stream, {
+                inputType: audioStream.type
+            });
 
             const queueItem: QueueItem = {
                 url,
-                title: video.title ?? 'Unknown Title',
+                title: 'title' in audioStream && typeof audioStream.title === 'string' 
+                    ? audioStream.title 
+                    : 'Unknown Title',
                 requestedBy,
-                duration: video.durationInSec.toString()
+                duration: '0:00',
+                thumbnail: undefined,
+                artist: 'artists' in audioStream && Array.isArray(audioStream.artists) && audioStream.artists.length > 0 
+                    ? String(audioStream.artists[0].name)
+                    : 'Unknown Artist'
             };
 
             guildData.queue.push(queueItem);
-
+            
+            // If nothing is playing, start playing
             if (!guildData.currentItem) {
                 await this.processQueue(guildId);
-            } else {
-                const queuePosition = guildData.queue.length;
-                const embed = new EmbedBuilder()
-                    .setColor('#FF0000')
-                    .setTitle(queueItem.title)
-                    .setURL(queueItem.url)
-                    .setAuthor({
-                        name: '🎵 Added to Queue',
-                        iconURL: 'https://i.imgur.com/IbS3k6R.png'
-                    })
-                    .setThumbnail(videoInfo.video_details.thumbnails[0].url)
-                    .addFields(
-                        { name: 'Duration', value: queueItem.duration, inline: true },
-                        { name: 'Requested By', value: queueItem.requestedBy, inline: true },
-                        { name: 'Position in Queue', value: `#${queuePosition}`, inline: true }
-                    )
-                    .setTimestamp()
-                    .setFooter({ 
-                        text: `Total songs in queue: ${guildData.queue.length}`,
-                        iconURL: 'https://i.imgur.com/IbS3k6R.png'
-                    });
-
-                await guildData.textChannel.send({ embeds: [embed] });
             }
         } catch (error) {
-            logger.error(error, `Error adding track in guild ${guildId}`);
-            const errorEmbed = new EmbedBuilder()
-                .setColor('#FF0000')
-                .setTitle('❌ Error Adding Track')
-                .setDescription(error instanceof Error ? error.message : 'An error occurred while adding the track.')
-                .setTimestamp();
-            await textChannel.send({ embeds: [errorEmbed] });
-            throw error;
+            logger.error('Error adding track:', error);
+            throw new Error('Failed to add track to queue');
         }
     }
 
@@ -256,14 +348,7 @@ export class MusicHandler {
             }
 
             logger.info(`Starting stream for URL: ${nextTrack.url}`);
-            const audioStream = await stream(nextTrack.url, {
-                discordPlayerCompatibility: true,
-                quality: 2,  // Force high quality
-                seek: 0,
-                language: 'en'
-            });
-
-            const videoInfo = await video_info(nextTrack.url);
+            const audioStream = await stream(nextTrack.url);
             logger.info('Stream created successfully');
 
             logger.info('Creating audio resource');
@@ -322,14 +407,14 @@ export class MusicHandler {
 
             // Create rich embed for now playing message
             const embed = new EmbedBuilder()
-                .setColor('#FF0000')  // YouTube red color
+                .setColor('#1DB954')  // Spotify green
                 .setTitle(nextTrack.title)
+                .setDescription(`by ${nextTrack.artist}`)
                 .setURL(nextTrack.url)
                 .setAuthor({
                     name: '🎵 Now Playing',
-                    iconURL: 'https://i.imgur.com/IbS3k6R.png'  // Music note icon
+                    iconURL: 'https://i.imgur.com/IbS3k6R.png'
                 })
-                .setThumbnail((await video_info(nextTrack.url)).video_details.thumbnails[0].url)
                 .addFields(
                     { name: 'Duration', value: nextTrack.duration, inline: true },
                     { name: 'Requested By', value: nextTrack.requestedBy, inline: true }
@@ -339,19 +424,6 @@ export class MusicHandler {
                     text: `Volume: ${guildData.filters.volume * 100}% | Bassboost: ${guildData.filters.bassboost ? 'On' : 'Off'}`,
                     iconURL: 'https://i.imgur.com/IbS3k6R.png'
                 });
-
-            // Add state change listener
-            guildData.audioPlayer.on(AudioPlayerStatus.Playing, () => {
-                logger.info(`Audio player state changed to Playing for guild ${guildId}`);
-            });
-
-            guildData.audioPlayer.on(AudioPlayerStatus.Buffering, () => {
-                logger.info(`Audio player state changed to Buffering for guild ${guildId}`);
-            });
-
-            guildData.audioPlayer.on(AudioPlayerStatus.AutoPaused, () => {
-                logger.info(`Audio player state changed to AutoPaused for guild ${guildId}`);
-            });
 
             if (guildData.timeout) {
                 clearTimeout(guildData.timeout);
