@@ -9,7 +9,7 @@ import {
     VoiceConnectionStatus
 } from '@discordjs/voice';
 import { stream, video_info } from 'play-dl';
-import { TextChannel, NewsChannel, ThreadChannel, DMChannel } from 'discord.js';
+import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder } from 'discord.js';
 import { logger } from '../../config/logger.js';
 import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
 
@@ -137,12 +137,37 @@ export class MusicHandler {
             if (!guildData.currentItem) {
                 await this.processQueue(guildId);
             } else {
-                await guildData.textChannel.send(
-                    `🎵 Added to queue: ${queueItem.title}`
-                );
+                const queuePosition = guildData.queue.length;
+                const embed = new EmbedBuilder()
+                    .setColor('#FF0000')
+                    .setTitle(queueItem.title)
+                    .setURL(queueItem.url)
+                    .setAuthor({
+                        name: '🎵 Added to Queue',
+                        iconURL: 'https://i.imgur.com/IbS3k6R.png'
+                    })
+                    .setThumbnail(video.thumbnails[0].url)
+                    .addFields(
+                        { name: 'Duration', value: queueItem.duration, inline: true },
+                        { name: 'Requested By', value: queueItem.requestedBy, inline: true },
+                        { name: 'Position in Queue', value: `#${queuePosition}`, inline: true }
+                    )
+                    .setTimestamp()
+                    .setFooter({ 
+                        text: `Total songs in queue: ${guildData.queue.length}`,
+                        iconURL: 'https://i.imgur.com/IbS3k6R.png'
+                    });
+
+                await guildData.textChannel.send({ embeds: [embed] });
             }
         } catch (error) {
             logger.error(error, `Error adding track in guild ${guildId}`);
+            const errorEmbed = new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('❌ Error Adding Track')
+                .setDescription(error instanceof Error ? error.message : 'An error occurred while adding the track.')
+                .setTimestamp();
+            await textChannel.send({ embeds: [errorEmbed] });
             throw error;
         }
     }
@@ -150,6 +175,7 @@ export class MusicHandler {
     private async processQueue(guildId: string): Promise<void> {
         const guildData = this.queues.get(guildId);
         if (!guildData || guildData.queue.length === 0) {
+            logger.info(`No tracks in queue for guild ${guildId}`);
             this.startIdleTimeout(guildId);
             return;
         }
@@ -157,34 +183,79 @@ export class MusicHandler {
         try {
             const nextTrack = guildData.queue.shift()!;
             guildData.currentItem = nextTrack;
+            logger.info(`Processing track: ${nextTrack.title} in guild ${guildId}`);
 
+            logger.info(`Starting stream for URL: ${nextTrack.url}`);
             const audioStream = await stream(nextTrack.url);
+            const videoInfo = await video_info(nextTrack.url);
+            logger.info('Stream created successfully');
+
+            logger.info('Creating audio resource');
             guildData.currentResource = createAudioResource(audioStream.stream, {
                 inputType: audioStream.type,
                 inlineVolume: true
             });
+            logger.info('Audio resource created');
 
             if (guildData.currentResource.volume) {
                 const volume = guildData.filters.bassboost 
                     ? guildData.filters.volume * 1.5 
                     : guildData.filters.volume;
                 guildData.currentResource.volume.setVolume(volume);
+                logger.info(`Set volume to ${volume}`);
             }
 
+            logger.info('Starting playback');
             guildData.audioPlayer.play(guildData.currentResource);
+
+            // Create rich embed for now playing message
+            const embed = new EmbedBuilder()
+                .setColor('#FF0000')  // YouTube red color
+                .setTitle(nextTrack.title)
+                .setURL(nextTrack.url)
+                .setAuthor({
+                    name: '🎵 Now Playing',
+                    iconURL: 'https://i.imgur.com/IbS3k6R.png'  // Music note icon
+                })
+                .setThumbnail(videoInfo.video_details.thumbnails[0].url)
+                .addFields(
+                    { name: 'Duration', value: nextTrack.duration, inline: true },
+                    { name: 'Requested By', value: nextTrack.requestedBy, inline: true }
+                )
+                .setTimestamp()
+                .setFooter({ 
+                    text: `Volume: ${guildData.filters.volume * 100}% | Bassboost: ${guildData.filters.bassboost ? 'On' : 'Off'}`,
+                    iconURL: 'https://i.imgur.com/IbS3k6R.png'
+                });
+
+            // Add state change listener
+            guildData.audioPlayer.on(AudioPlayerStatus.Playing, () => {
+                logger.info(`Audio player state changed to Playing for guild ${guildId}`);
+            });
+
+            guildData.audioPlayer.on(AudioPlayerStatus.Buffering, () => {
+                logger.info(`Audio player state changed to Buffering for guild ${guildId}`);
+            });
+
+            guildData.audioPlayer.on(AudioPlayerStatus.AutoPaused, () => {
+                logger.info(`Audio player state changed to AutoPaused for guild ${guildId}`);
+            });
 
             if (guildData.timeout) {
                 clearTimeout(guildData.timeout);
                 guildData.timeout = null;
             }
 
-            await guildData.textChannel.send(
-                `🎵 Now playing: ${nextTrack.title}`
-            );
+            await guildData.textChannel.send({ embeds: [embed] });
         } catch (error) {
             logger.error(error, `Error processing queue in guild ${guildId}`);
             try {
-                await guildData.textChannel.send('❌ Error playing track, skipping...');
+                const errorEmbed = new EmbedBuilder()
+                    .setColor('#FF0000')
+                    .setTitle('❌ Error Playing Track')
+                    .setDescription('An error occurred while playing the track. Skipping to next song...')
+                    .setTimestamp();
+                await guildData.textChannel.send({ embeds: [errorEmbed] });
             } catch (sendError) {
                 logger.error(sendError, 'Failed to send error message to channel');
             }
