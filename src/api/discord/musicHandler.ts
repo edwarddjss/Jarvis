@@ -11,6 +11,7 @@ import {
 import { stream, video_info } from 'play-dl';
 import { TextChannel, NewsChannel, ThreadChannel, DMChannel } from 'discord.js';
 import { logger } from '../../config/logger.js';
+import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
 
 type SendableChannel = TextChannel | NewsChannel | ThreadChannel | DMChannel;
 
@@ -39,9 +40,11 @@ export class MusicHandler {
     private static instance: MusicHandler;
     private queues: Map<string, GuildQueueData>;
     private readonly IDLE_TIMEOUT = 300000; // 5 minutes
+    private stateManager: VoiceStateManager;
 
     private constructor() {
         this.queues = new Map();
+        this.stateManager = VoiceStateManager.getInstance();
     }
 
     public static getInstance(): MusicHandler {
@@ -103,6 +106,14 @@ export class MusicHandler {
     ): Promise<void> {
         try {
             const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
+
+            // Check if AI is currently speaking
+            if (this.stateManager.isSpeaking(guildId)) {
+                throw new Error('Cannot play music while AI is speaking. Please wait a moment and try again.');
+            }
+
+            // Set state to music
+            this.stateManager.setVoiceState(guildId, VoiceActivityType.MUSIC);
 
             const videoInfo = await video_info(url);
             const video = videoInfo.video_details;
@@ -178,13 +189,20 @@ export class MusicHandler {
         const guildData = this.queues.get(guildId);
         if (!guildData) return;
 
-        guildData.currentItem = null;
+        // Clear the current track
         guildData.currentResource = null;
+        guildData.currentItem = null;
 
         if (guildData.queue.length > 0) {
+            // Play next track if queue is not empty
             this.processQueue(guildId);
         } else {
-            this.startIdleTimeout(guildId);
+            // Clear the music state if no more tracks
+            this.stateManager.clearState(guildId);
+            
+            // Start disconnect timeout
+            if (guildData.timeout) clearTimeout(guildData.timeout);
+            guildData.timeout = setTimeout(() => this.cleanup(guildId), this.IDLE_TIMEOUT);
         }
     }
 

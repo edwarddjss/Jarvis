@@ -2,6 +2,7 @@ import opus from '@discordjs/opus';
 import { AudioReceiveStream, EndBehaviorType, VoiceConnection } from '@discordjs/voice';
 import { logger } from '../../config/index.js';
 import { ElevenLabsConversationalAI } from '../index.js';
+import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
 
 /**
  * Handles speech processing for users in a voice channel.
@@ -11,10 +12,13 @@ class SpeechHandler {
   private client: ElevenLabsConversationalAI;
   private decoder: opus.OpusEncoder;
   private connection: VoiceConnection;
+  private stateManager: VoiceStateManager;
+  private guildId: string;
 
   constructor(
     client: ElevenLabsConversationalAI,
     connection: VoiceConnection,
+    guildId: string,
     sampleRate: number = 16000,
     channels: number = 1
   ) {
@@ -22,6 +26,8 @@ class SpeechHandler {
     this.client = client;
     this.decoder = new opus.OpusEncoder(sampleRate, channels);
     this.connection = connection;
+    this.guildId = guildId;
+    this.stateManager = VoiceStateManager.getInstance();
   }
 
   /**
@@ -30,6 +36,14 @@ class SpeechHandler {
    */
   async initialize(): Promise<void> {
     try {
+      // Check if music is playing
+      if (this.stateManager.isPlayingMusic(this.guildId)) {
+        throw new Error('Cannot start speech while music is playing. Please stop the music first.');
+      }
+
+      // Set state to speech
+      this.stateManager.setVoiceState(this.guildId, VoiceActivityType.SPEECH);
+
       await this.client.connect();
 
       this.connection.receiver.speaking.on('start', (userId: string) => {
@@ -43,7 +57,9 @@ class SpeechHandler {
         }
       });
     } catch (error) {
+      this.stateManager.clearState(this.guildId);
       logger.error(error, 'Error initializing speech handler');
+      throw error;
     }
   }
 
@@ -100,12 +116,10 @@ class SpeechHandler {
    * @returns {void}
    */
   private cleanup(): void {
-    for (const audioStream of this.speakingUsers.values()) {
-      audioStream.push(null);
-      audioStream.destroy();
-    }
+    this.speakingUsers.forEach((stream) => stream.destroy());
     this.speakingUsers.clear();
     this.client.disconnect();
+    this.stateManager.clearState(this.guildId);
   }
 }
 
