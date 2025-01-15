@@ -2,7 +2,7 @@ import express from 'express';
 import { logger } from './config/logger.js';
 import fs from 'fs/promises';
 import path from 'path';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 
 const app = express();
 const port = process.env.PORT || 8080;
@@ -13,6 +13,17 @@ const SPOTIFY_CLIENT_ID = process.env.SPOTIFY_CLIENT_ID;
 const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET;
 const SPOTIFY_REDIRECT_URI = process.env.SPOTIFY_REDIRECT_URI || `http://localhost:${port}/callback`;
 
+// Error handling utility
+function handleError(error: unknown): string {
+    if (error instanceof AxiosError) {
+        return `${error.message} - ${JSON.stringify(error.response?.data || {})}`;
+    }
+    if (error instanceof Error) {
+        return error.message;
+    }
+    return String(error);
+}
+
 // Ensure the directory exists for token storage
 async function ensureTokenDirectory() {
     const tokenDir = process.cwd();
@@ -20,7 +31,7 @@ async function ensureTokenDirectory() {
         await fs.access(tokenDir);
         logger.info(`Token directory exists: ${tokenDir}`);
     } catch (error) {
-        logger.error(error, `Error accessing token directory: ${tokenDir}`);
+        logger.error({ err: error }, `Error accessing token directory: ${tokenDir}`);
         throw error;
     }
 }
@@ -68,15 +79,14 @@ app.get('/callback', async (req, res) => {
             );
             logger.info('Successfully received token response from Spotify');
         } catch (error) {
-            logger.error(error, 'Failed to exchange authorization code for tokens');
-            logger.error(`Spotify API Error Response: ${JSON.stringify(error.response?.data || {})}`);
+            const errorMessage = handleError(error);
+            logger.error({ err: error }, `Failed to exchange authorization code for tokens: ${errorMessage}`);
             return res.status(500).send('Failed to exchange authorization code');
         }
 
         const { refresh_token, access_token } = tokenResponse.data;
 
         if (!refresh_token) {
-            logger.error('No refresh token received from Spotify');
             logger.error(`Token response data: ${JSON.stringify(tokenResponse.data)}`);
             return res.status(500).send('Failed to obtain refresh token');
         }
@@ -85,7 +95,7 @@ app.get('/callback', async (req, res) => {
         try {
             await ensureTokenDirectory();
         } catch (error) {
-            logger.error(error, 'Failed to access token directory');
+            logger.error({ err: error }, `Failed to access token directory: ${handleError(error)}`);
             return res.status(500).send('Server storage error');
         }
 
@@ -114,14 +124,14 @@ app.get('/callback', async (req, res) => {
             }
             logger.info('Successfully verified token file contents');
         } catch (error) {
-            logger.error(error, 'Failed to save or verify token file');
+            logger.error({ err: error }, `Failed to save or verify token file: ${handleError(error)}`);
             return res.status(500).send('Failed to save authorization tokens');
         }
         
         logger.info('Spotify authorization process completed successfully');
         res.send('Authorization successful! You can close this window.');
     } catch (error) {
-        logger.error(error, 'Unhandled error in Spotify callback');
+        logger.error({ err: error }, `Unhandled error in Spotify callback: ${handleError(error)}`);
         res.status(500).send('Error processing authorization');
     }
 });
@@ -135,6 +145,6 @@ app.listen(port, async () => {
         await ensureTokenDirectory();
         logger.info('Token directory is accessible');
     } catch (error) {
-        logger.error(error, 'Failed to access token directory during startup');
+        logger.error({ err: error }, `Failed to access token directory during startup: ${handleError(error)}`);
     }
 });
