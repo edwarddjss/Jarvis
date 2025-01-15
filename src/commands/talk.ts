@@ -29,7 +29,11 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
 
     connection.subscribe(audioPlayer);
 
-    const speechHandler = new SpeechHandler(elevenlabsConvClient, connection);
+    const speechHandler = new SpeechHandler(
+      elevenlabsConvClient, 
+      connection,
+      interaction.guildId!
+    );
     speechHandler.initialize();
   } catch (error) {
     logger.error(error, 'Something went wrong during voice mode');
