@@ -110,7 +110,7 @@ export class MusicHandler {
                 this.handleTrackEnd(guildId);
             });
 
-            // Set up voice connection event handlers
+            // Handle voice connection state changes
             connection.on(VoiceConnectionStatus.Disconnected, async () => {
                 try {
                     await Promise.race([
@@ -119,14 +119,23 @@ export class MusicHandler {
                     ]);
                     // Seems to be reconnecting to a new channel - ignore disconnect
                 } catch (error) {
-                    // Seems to be a real disconnect which SHOULDN'T be recovered from
-                    connection.destroy();
-                    this.cleanup(guildId);
+                    // Only cleanup if not already destroyed
+                    if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
+                        this.cleanup(guildId);
+                    }
                 }
             });
 
             connection.on(VoiceConnectionStatus.Destroyed, () => {
-                this.cleanup(guildId);
+                // Only cleanup if we still have guild data
+                if (this.queues.has(guildId)) {
+                    this.cleanup(guildId);
+                }
+            });
+
+            // Handle errors
+            connection.on('error', error => {
+                logger.error(error, `Voice connection error in guild ${guildId}`);
             });
 
             // Subscribe connection to audio player
@@ -345,19 +354,38 @@ export class MusicHandler {
     }
 
     private cleanup(guildId: string): void {
-        logger.info(`Cleaning up music handler for guild ${guildId}`);
         const guildData = this.queues.get(guildId);
         if (!guildData) return;
 
-        if (guildData.timeout) {
-            clearTimeout(guildData.timeout);
-        }
+        try {
+            // Stop audio player first
+            if (guildData.audioPlayer) {
+                guildData.audioPlayer.stop(true);
+            }
 
-        guildData.audioPlayer.removeAllListeners();
-        guildData.audioPlayer.stop(true);
-        guildData.connection.destroy();
-        this.stateManager.clearState(guildId);
-        this.queues.delete(guildId);
+            // Clear the queue
+            guildData.queue = [];
+            guildData.currentItem = null;
+            guildData.currentResource = null;
+
+            // Clear the timeout if it exists
+            if (guildData.timeout) {
+                clearTimeout(guildData.timeout);
+                guildData.timeout = null;
+            }
+
+            // Only destroy connection if it hasn't been destroyed yet
+            if (guildData.connection && guildData.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+                guildData.connection.destroy();
+            }
+
+            // Remove from queue map
+            this.queues.delete(guildId);
+            
+            logger.info(`Cleaned up resources for guild ${guildId}`);
+        } catch (error) {
+            logger.error(error, `Error during cleanup for guild ${guildId}`);
+        }
     }
 
     public stop(guildId: string): void {
