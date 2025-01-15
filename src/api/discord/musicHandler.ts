@@ -131,12 +131,8 @@ export class MusicHandler {
                 this.cleanup(guildId);
             });
 
-            // Subscribe the connection to the audio player
-            const subscription = connection.subscribe(audioPlayer);
-            if (!subscription) {
-                logger.error(`Failed to subscribe connection to audio player in guild ${guildId}`);
-                throw new Error('Failed to subscribe connection to audio player');
-            }
+            // Subscribe connection to audio player
+            connection.subscribe(audioPlayer);
             logger.info(`Successfully subscribed connection to audio player in guild ${guildId}`);
 
             this.queues.set(guildId, guildData);
