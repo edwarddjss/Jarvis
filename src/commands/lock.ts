@@ -9,10 +9,12 @@ const command: Command = {
   async execute(interaction) {
     const member = interaction.member as GuildMember;
     
+    // Defer the reply immediately
+    await interaction.deferReply({ ephemeral: true });
+    
     if (!member?.voice?.channel) {
-      await interaction.reply({
-        content: 'You must be in a voice channel to use this command!',
-        flags: [MessageFlags.Ephemeral]
+      await interaction.editReply({
+        content: 'You must be in a voice channel to use this command!'
       });
       return;
     }
@@ -22,9 +24,8 @@ const command: Command = {
     // Check bot's permissions first
     const botMember = interaction.guild?.members.cache.get(interaction.client.user.id);
     if (!botMember?.permissions.has(PermissionsBitField.Flags.ManageChannels)) {
-      await interaction.reply({
-        content: 'I don\'t have permission to manage channels. Please check my role permissions.',
-        flags: [MessageFlags.Ephemeral]
+      await interaction.editReply({
+        content: 'I don\'t have permission to manage channels. Please check my role permissions.'
       });
       return;
     }
@@ -37,15 +38,13 @@ const command: Command = {
         }
       ]);
       
-      await interaction.reply({
-        content: '🔒 Voice channel is now private',
-        flags: [MessageFlags.Ephemeral]
+      await interaction.editReply({
+        content: '🔒 Voice channel is now private'
       });
     } catch (error) {
       console.error('Error locking channel:', error);
-      await interaction.reply({
-        content: 'Error: Make sure I have the correct permissions and my role is positioned above the voice channel in the server settings.',
-        flags: [MessageFlags.Ephemeral]
+      await interaction.editReply({
+        content: 'Error: Make sure I have the correct permissions and my role is positioned above the voice channel in the server settings.'
       });
     }
   }

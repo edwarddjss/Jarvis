@@ -10,11 +10,11 @@ import {
     entersState,
     NoSubscriberBehavior
 } from '@discordjs/voice';
-import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder } from 'discord.js';
+import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType, ButtonInteraction } from 'discord.js';
 import { logger } from '../../config/logger.js';
-import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
+import { VoiceStateManager } from './voiceStateManager.js';
 import { SpotifyService } from '../spotify/spotifyService.js';
-import { stream, type SpotifyTrack } from 'play-dl';
+import { stream } from 'play-dl';
 
 type SendableChannel = TextChannel | NewsChannel | ThreadChannel | DMChannel;
 
@@ -71,16 +71,17 @@ export class MusicHandler {
         if (!guildData) {
             const audioPlayer = createAudioPlayer({
                 behaviors: {
-                    noSubscriber: NoSubscriberBehavior.Play, // Continue playing even without subscribers
+                    noSubscriber: NoSubscriberBehavior.Play
                 }
             });
+
             guildData = {
                 audioPlayer,
                 connection,
                 queue: [],
                 filters: {
                     bassboost: false,
-                    volume: 1.0
+                    volume: 1
                 },
                 textChannel,
                 currentResource: null,
@@ -88,66 +89,28 @@ export class MusicHandler {
                 timeout: null
             };
 
-            // Set up audio player event handlers
+            this.queues.set(guildId, guildData);
+            connection.subscribe(audioPlayer);
+
             audioPlayer.on(AudioPlayerStatus.Idle, () => {
-                logger.info(`Audio player idle in guild ${guildId}`);
                 this.handleTrackEnd(guildId);
             });
 
-            audioPlayer.on(AudioPlayerStatus.Playing, () => {
-                logger.info(`Audio player playing in guild ${guildId}`);
-            });
-
-            audioPlayer.on(AudioPlayerStatus.Paused, () => {
-                logger.info(`Audio player paused in guild ${guildId}`);
-            });
-
-            audioPlayer.on(AudioPlayerStatus.Buffering, () => {
-                logger.info(`Audio player buffering in guild ${guildId}`);
-            });
-
-            audioPlayer.on(AudioPlayerStatus.AutoPaused, () => {
-                logger.info(`Audio player auto-paused in guild ${guildId}`);
-            });
-
-            audioPlayer.on('error', (error) => {
-                logger.error(error, `Audio player error in guild ${guildId}`);
+            audioPlayer.on('error', error => {
+                logger.error(error, `Error in audio player for guild ${guildId}`);
                 this.handleTrackEnd(guildId);
             });
 
-            // Handle voice connection state changes
             connection.on(VoiceConnectionStatus.Disconnected, async () => {
                 try {
                     await Promise.race([
                         entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
                         entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
                     ]);
-                    // Seems to be reconnecting to a new channel - ignore disconnect
                 } catch (error) {
-                    // Only cleanup if not already destroyed
-                    if (connection.state.status !== VoiceConnectionStatus.Destroyed) {
-                        this.cleanup(guildId);
-                    }
-                }
-            });
-
-            connection.on(VoiceConnectionStatus.Destroyed, () => {
-                // Only cleanup if we still have guild data
-                if (this.queues.has(guildId)) {
                     this.cleanup(guildId);
                 }
             });
-
-            // Handle errors
-            connection.on('error', error => {
-                logger.error(error, `Voice connection error in guild ${guildId}`);
-            });
-
-            // Subscribe connection to audio player
-            connection.subscribe(audioPlayer);
-            logger.info(`Successfully subscribed connection to audio player in guild ${guildId}`);
-
-            this.queues.set(guildId, guildData);
         }
 
         return guildData;
@@ -166,284 +129,239 @@ export class MusicHandler {
             if (tracks.length === 0) {
                 const embed = new EmbedBuilder()
                     .setColor('#FF0000')
-                    .setTitle('❌ No Results Found')
-                    .setDescription('No tracks found matching your search query.')
+                    .setTitle('No Results Found')
+                    .setDescription('❌ No tracks found matching your search query.')
                     .setTimestamp();
                 await textChannel.send({ embeds: [embed] });
                 return;
             }
 
             const embed = new EmbedBuilder()
-                .setColor('#1DB954')  // Spotify green
-                .setTitle('🎵 Search Results')
-                .setDescription('Select a track to play:')
-                .setTimestamp();
+                .setColor('#1DB954')
+                .setTitle('Search Results')
+                .setDescription(`🔍 Results for: "${query}"`)
+                .addFields(
+                    tracks.slice(0, 5).map((track, index) => ({
+                        name: `${index + 1}. ${track.name}`,
+                        value: `👤 ${track.artists.map(a => a.name).join(', ')}\n⏱️ ${this.spotifyService.formatTrackDuration(track.duration_ms)}`
+                    }))
+                )
+                .setThumbnail(tracks[0]?.external_urls?.spotify || 'https://i.imgur.com/IbS3k6R.png')
+                .setFooter({ text: 'Select a track within 30 seconds', iconURL: 'https://i.imgur.com/IbS3k6R.png' });
 
-            // Create buttons for each track
             const buttons = tracks.slice(0, 5).map((track, index) => {
                 return new ButtonBuilder()
-                    .setCustomId(`play_${index}`)
-                    .setLabel(`${index + 1}. ${track.name} - ${track.artists[0].name}`)
-                    .setStyle(ButtonStyle.Primary);
+                    .setCustomId(`play_${index}_${guildId}`)
+                    .setLabel(`${index + 1}`)
+                    .setEmoji('▶️')
+                    .setStyle(ButtonStyle.Success);
             });
 
-            // Split buttons into rows (max 5 buttons per row)
-            const rows = [];
-            for (let i = 0; i < buttons.length; i += 5) {
-                const row = new ActionRowBuilder<ButtonBuilder>()
-                    .addComponents(buttons.slice(i, i + 5));
-                rows.push(row);
-            }
+            const row = new ActionRowBuilder<ButtonBuilder>()
+                .addComponents(buttons);
 
             const message = await textChannel.send({
                 embeds: [embed],
-                components: rows
+                components: [row]
             });
 
-            // Create collector for button interactions
             const collector = message.createMessageComponentCollector({
-                time: 30000 // 30 seconds timeout
+                componentType: ComponentType.Button,
+                time: 30000
             });
 
-            collector.on('collect', async (interaction) => {
-                if (!interaction.isButton()) return;
+            collector.on('collect', async (i: ButtonInteraction) => {
+                if (!i.customId.startsWith('play_')) return;
 
-                const index = parseInt(interaction.customId.split('_')[1]);
-                const selectedTrack = tracks[index];
+                const [_, index, trackGuildId] = i.customId.split('_');
+                if (trackGuildId !== guildId) return;
 
-                await interaction.deferUpdate();
+                await i.deferUpdate();
+                const selectedTrack = tracks[parseInt(index)];
 
-                // Add the track to queue
+                const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
                 const queueItem: QueueItem = {
                     url: selectedTrack.external_urls.spotify,
                     title: selectedTrack.name,
-                    requestedBy: requestedBy,
+                    requestedBy,
                     duration: this.spotifyService.formatTrackDuration(selectedTrack.duration_ms),
-                    artist: selectedTrack.artists[0].name
+                    artist: selectedTrack.artists.map(a => a.name).join(', '),
+                    thumbnail: selectedTrack.external_urls.spotify
                 };
 
-                const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
                 guildData.queue.push(queueItem);
+
+                const addedEmbed = new EmbedBuilder()
+                    .setColor('#1DB954')
+                    .setTitle(queueItem.title)
+                    .setURL(queueItem.url)
+                    .setDescription(`Added to queue by ${requestedBy}`)
+                    .addFields(
+                        { name: 'Artist', value: queueItem.artist || 'Unknown Artist', inline: true },
+                        { name: 'Duration', value: queueItem.duration, inline: true },
+                        { name: 'Position', value: `#${guildData.queue.length}`, inline: true }
+                    )
+                    .setThumbnail(queueItem.thumbnail || 'https://i.imgur.com/IbS3k6R.png')
+                    .setTimestamp();
+
+                await message.edit({ embeds: [embed], components: [] });
+                await textChannel.send({ embeds: [addedEmbed] });
 
                 if (!guildData.currentItem) {
                     await this.processQueue(guildId);
-                } else {
-                    const queuePosition = guildData.queue.length;
-                    const addedEmbed = new EmbedBuilder()
-                        .setColor('#1DB954')
-                        .setTitle(queueItem.title)
-                        .setDescription(`by ${queueItem.artist}`)
-                        .setURL(queueItem.url)
-                        .setAuthor({
-                            name: '🎵 Added to Queue',
-                            iconURL: 'https://i.imgur.com/IbS3k6R.png'
-                        })
-                        .addFields(
-                            { name: 'Duration', value: queueItem.duration, inline: true },
-                            { name: 'Requested By', value: queueItem.requestedBy, inline: true },
-                            { name: 'Position in Queue', value: `#${queuePosition}`, inline: true }
-                        )
-                        .setTimestamp();
-
-                    await textChannel.send({ embeds: [addedEmbed] });
                 }
 
                 collector.stop();
             });
 
-            collector.on('end', () => {
-                // Remove buttons after timeout or selection
-                message.edit({ components: [] }).catch(error => 
-                    logger.error(error, 'Failed to remove buttons after collector end')
-                );
+            collector.on('end', async () => {
+                try {
+                    const expiredEmbed = embed.setColor('#808080')
+                        .setDescription('❌ Search results have expired. Please try again.');
+                    await message.edit({
+                        embeds: [expiredEmbed],
+                        components: []
+                    });
+                } catch (error) {
+                    logger.error('Error removing search results buttons:', error);
+                }
             });
 
         } catch (error) {
-            logger.error(error, `Error searching tracks in guild ${guildId}`);
+            logger.error('Error searching for tracks:', error);
             const errorEmbed = new EmbedBuilder()
                 .setColor('#FF0000')
-                .setTitle('❌ Error')
-                .setDescription(error instanceof Error ? error.message : 'An error occurred while searching for tracks.')
+                .setTitle('Error')
+                .setDescription('❌ An error occurred while searching. Please try again.')
                 .setTimestamp();
             await textChannel.send({ embeds: [errorEmbed] });
         }
     }
 
-    public async addTrack(
+    public async addSpotifyTrack(
         guildId: string,
         connection: VoiceConnection,
         textChannel: SendableChannel,
         url: string,
         requestedBy: string
     ): Promise<void> {
-        const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
-        
         try {
-            const audioStream = await stream(url);
-            const resource = createAudioResource(audioStream.stream, {
-                inputType: audioStream.type
-            });
+            const track = await this.spotifyService.searchTracks(url);
+            if (!track || track.length === 0) {
+                throw new Error('Track not found');
+            }
 
+            const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
             const queueItem: QueueItem = {
-                url,
-                title: 'title' in audioStream && typeof audioStream.title === 'string' 
-                    ? audioStream.title 
-                    : 'Unknown Title',
+                url: track[0].external_urls.spotify,
+                title: track[0].name,
                 requestedBy,
-                duration: '0:00',
-                thumbnail: undefined,
-                artist: 'artists' in audioStream && Array.isArray(audioStream.artists) && audioStream.artists.length > 0 
-                    ? String(audioStream.artists[0].name)
-                    : 'Unknown Artist'
+                duration: this.spotifyService.formatTrackDuration(track[0].duration_ms),
+                artist: track[0].artists.map(a => a.name).join(', '),
+                thumbnail: track[0].external_urls.spotify
             };
 
             guildData.queue.push(queueItem);
-            
-            // If nothing is playing, start playing
+
+            const addedEmbed = new EmbedBuilder()
+                .setColor('#1DB954')
+                .setTitle(queueItem.title)
+                .setURL(queueItem.url)
+                .setDescription(`Added to queue by ${requestedBy}`)
+                .addFields(
+                    { name: 'Artist', value: queueItem.artist || 'Unknown Artist', inline: true },
+                    { name: 'Duration', value: queueItem.duration, inline: true },
+                    { name: 'Position', value: `#${guildData.queue.length}`, inline: true }
+                )
+                .setThumbnail(queueItem.thumbnail || 'https://i.imgur.com/IbS3k6R.png')
+                .setTimestamp();
+
+            await textChannel.send({ embeds: [addedEmbed] });
+
             if (!guildData.currentItem) {
                 await this.processQueue(guildId);
             }
         } catch (error) {
-            logger.error('Error adding track:', error);
-            throw new Error('Failed to add track to queue');
+            logger.error('Error adding Spotify track:', error);
+            throw error;
         }
     }
 
-    private async processQueue(guildId: string): Promise<void> {
+    public async processQueue(guildId: string): Promise<void> {
         const guildData = this.queues.get(guildId);
-        if (!guildData || guildData.queue.length === 0) {
-            logger.info(`No tracks in queue for guild ${guildId}`);
+        if (!guildData) return;
+
+        if (guildData.timeout) {
+            clearTimeout(guildData.timeout);
+            guildData.timeout = null;
+        }
+
+        if (guildData.queue.length === 0) {
             this.startIdleTimeout(guildId);
             return;
         }
 
+        const nextTrack = guildData.queue.shift()!;
+        guildData.currentItem = nextTrack;
+
         try {
-            const nextTrack = guildData.queue.shift()!;
-            guildData.currentItem = nextTrack;
-            logger.info(`Processing track: ${nextTrack.title} in guild ${guildId}`);
-
-            // Check voice connection state
-            if (guildData.connection.state.status === VoiceConnectionStatus.Disconnected) {
-                try {
-                    await Promise.race([
-                        entersState(guildData.connection, VoiceConnectionStatus.Ready, 5_000),
-                        entersState(guildData.connection, VoiceConnectionStatus.Signalling, 5_000),
-                    ]);
-                } catch (error) {
-                    logger.error(error, `Failed to reconnect voice connection for guild ${guildId}`);
-                    this.cleanup(guildId);
-                    return;
-                }
-            }
-
-            // Ensure connection is ready
             if (guildData.connection.state.status !== VoiceConnectionStatus.Ready) {
                 try {
                     await entersState(guildData.connection, VoiceConnectionStatus.Ready, 5_000);
                 } catch (error) {
-                    logger.error(error, `Voice connection not ready for guild ${guildId}`);
+                    logger.error('Voice connection not ready');
                     this.cleanup(guildId);
                     return;
                 }
             }
 
-            logger.info(`Starting stream for URL: ${nextTrack.url}`);
-            const audioStream = await stream(nextTrack.url);
-            logger.info('Stream created successfully');
+            const tracks = await this.spotifyService.searchTracks(nextTrack.url);
+            if (!tracks || tracks.length === 0) {
+                throw new Error('Track not found');
+            }
 
-            logger.info('Creating audio resource');
+            const audioStream = await stream(tracks[0].external_urls.spotify);
             guildData.currentResource = createAudioResource(audioStream.stream, {
                 inputType: audioStream.type,
-                inlineVolume: true,
-                silencePaddingFrames: 5
+                inlineVolume: true
             });
-            logger.info('Audio resource created');
 
             if (guildData.currentResource.volume) {
                 const volume = guildData.filters.bassboost 
                     ? guildData.filters.volume * 1.5 
                     : guildData.filters.volume;
                 guildData.currentResource.volume.setVolume(volume);
-                logger.info(`Set volume to ${volume}`);
             }
 
-            logger.info('Starting playback');
-            
-            // Set up a promise to detect when we enter Playing state
-            const playingPromise = new Promise<void>((resolve, reject) => {
-                const timeout = setTimeout(() => {
-                    cleanup();
-                    reject(new Error('Timed out waiting for audio to start playing'));
-                }, 10_000); // 10 second timeout
+            guildData.audioPlayer.play(guildData.currentResource);
 
-                const cleanup = () => {
-                    clearTimeout(timeout);
-                    guildData.audioPlayer.removeListener(AudioPlayerStatus.Playing, onPlaying);
-                    guildData.audioPlayer.removeListener('error', onError);
-                };
-
-                const onPlaying = () => {
-                    cleanup();
-                    resolve();
-                };
-
-                const onError = (error: Error) => {
-                    cleanup();
-                    reject(error);
-                };
-
-                guildData.audioPlayer.once(AudioPlayerStatus.Playing, onPlaying);
-                guildData.audioPlayer.once('error', onError);
-            });
-
-            try {
-                guildData.audioPlayer.play(guildData.currentResource);
-                await playingPromise;
-                logger.info('Successfully started playback');
-            } catch (error) {
-                logger.error(error, 'Failed to start playback');
-                throw error;
-            }
-
-            // Create rich embed for now playing message
-            const embed = new EmbedBuilder()
-                .setColor('#1DB954')  // Spotify green
-                .setTitle(nextTrack.title)
-                .setDescription(`by ${nextTrack.artist}`)
-                .setURL(nextTrack.url)
-                .setAuthor({
-                    name: '🎵 Now Playing',
-                    iconURL: 'https://i.imgur.com/IbS3k6R.png'
-                })
+            const nowPlayingEmbed = new EmbedBuilder()
+                .setColor('#1DB954')
+                .setTitle('Now Playing')
+                .setDescription(`🎵 [${nextTrack.title}](${nextTrack.url})`)
                 .addFields(
-                    { name: 'Duration', value: nextTrack.duration, inline: true },
-                    { name: 'Requested By', value: nextTrack.requestedBy, inline: true }
+                    { name: 'Artist', value: `👤 ${nextTrack.artist || 'Unknown Artist'}`, inline: true },
+                    { name: 'Duration', value: `⏱️ ${nextTrack.duration}`, inline: true },
+                    { name: 'Requested By', value: `👥 ${nextTrack.requestedBy}`, inline: true }
                 )
-                .setTimestamp()
+                .setThumbnail(nextTrack.thumbnail || 'https://i.imgur.com/IbS3k6R.png')
                 .setFooter({ 
-                    text: `Volume: ${guildData.filters.volume * 100}% | Bassboost: ${guildData.filters.bassboost ? 'On' : 'Off'}`,
+                    text: `Volume: ${Math.round(guildData.filters.volume * 100)}% | Bassboost: ${guildData.filters.bassboost ? 'On' : 'Off'}`,
                     iconURL: 'https://i.imgur.com/IbS3k6R.png'
                 });
 
-            if (guildData.timeout) {
-                clearTimeout(guildData.timeout);
-                guildData.timeout = null;
-            }
+            await guildData.textChannel.send({ embeds: [nowPlayingEmbed] });
 
-            await guildData.textChannel.send({ embeds: [embed] });
         } catch (error) {
-            logger.error(error, `Error processing queue in guild ${guildId}`);
-            try {
-                const errorEmbed = new EmbedBuilder()
-                    .setColor('#FF0000')
-                    .setTitle('❌ Error Playing Track')
-                    .setDescription('An error occurred while playing the track. Skipping to next song...')
-                    .setTimestamp();
-                await guildData.textChannel.send({ embeds: [errorEmbed] });
-            } catch (sendError) {
-                logger.error(sendError, 'Failed to send error message to channel');
-            }
-            this.handleTrackEnd(guildId);
+            logger.error('Error processing queue:', error);
+            const errorEmbed = new EmbedBuilder()
+                .setColor('#FF0000')
+                .setTitle('Error')
+                .setDescription('❌ Failed to play track. Skipping to next song...')
+                .setTimestamp();
+            await guildData.textChannel.send({ embeds: [errorEmbed] });
+            guildData.currentItem = null;
+            this.processQueue(guildId);
         }
     }
 
@@ -451,20 +369,13 @@ export class MusicHandler {
         const guildData = this.queues.get(guildId);
         if (!guildData) return;
 
-        // Clear the current track
-        guildData.currentResource = null;
         guildData.currentItem = null;
+        guildData.currentResource = null;
 
         if (guildData.queue.length > 0) {
-            // Play next track if queue is not empty
             this.processQueue(guildId);
         } else {
-            // Clear the music state if no more tracks
-            this.stateManager.clearState(guildId);
-            
-            // Start disconnect timeout
-            if (guildData.timeout) clearTimeout(guildData.timeout);
-            guildData.timeout = setTimeout(() => this.cleanup(guildId), this.IDLE_TIMEOUT);
+            this.startIdleTimeout(guildId);
         }
     }
 
@@ -481,86 +392,28 @@ export class MusicHandler {
         }, this.IDLE_TIMEOUT);
     }
 
-    private cleanup(guildId: string): void {
+    public cleanup(guildId: string): void {
         const guildData = this.queues.get(guildId);
         if (!guildData) return;
 
-        try {
-            // Stop audio player first
-            if (guildData.audioPlayer) {
-                guildData.audioPlayer.stop(true);
-            }
-
-            // Clear the queue
-            guildData.queue = [];
-            guildData.currentItem = null;
-            guildData.currentResource = null;
-
-            // Clear the timeout if it exists
-            if (guildData.timeout) {
-                clearTimeout(guildData.timeout);
-                guildData.timeout = null;
-            }
-
-            // Only destroy connection if it hasn't been destroyed yet
-            if (guildData.connection && guildData.connection.state.status !== VoiceConnectionStatus.Destroyed) {
-                guildData.connection.destroy();
-            }
-
-            // Remove from queue map
-            this.queues.delete(guildId);
-            
-            logger.info(`Cleaned up resources for guild ${guildId}`);
-        } catch (error) {
-            logger.error(error, `Error during cleanup for guild ${guildId}`);
+        if (guildData.connection) {
+            guildData.connection.destroy();
         }
+
+        if (guildData.timeout) {
+            clearTimeout(guildData.timeout);
+        }
+
+        this.queues.delete(guildId);
     }
 
     public stop(guildId: string): void {
         const guildData = this.queues.get(guildId);
         if (!guildData) return;
 
-        logger.info(`Stopping music playback in guild ${guildId}`);
         guildData.queue = [];
         guildData.audioPlayer.stop(true);
-        guildData.currentItem = null;
-        guildData.currentResource = null;
-        
-        // Clear the music state
-        this.stateManager.clearState(guildId);
-        logger.info(`Cleared music state for guild ${guildId}`);
-        
-        this.startIdleTimeout(guildId);
-    }
-
-    public toggleBassboost(guildId: string): boolean {
-        const guildData = this.queues.get(guildId);
-        if (!guildData) return false;
-
-        guildData.filters.bassboost = !guildData.filters.bassboost;
-
-        if (guildData.currentResource?.volume) {
-            const volume = guildData.filters.bassboost 
-                ? guildData.filters.volume * 1.5 
-                : guildData.filters.volume;
-            guildData.currentResource.volume.setVolume(volume);
-        }
-
-        return guildData.filters.bassboost;
-    }
-
-    public clearFilters(guildId: string): void {
-        const guildData = this.queues.get(guildId);
-        if (!guildData) return;
-
-        guildData.filters = {
-            bassboost: false,
-            volume: 1.0
-        };
-
-        if (guildData.currentResource?.volume) {
-            guildData.currentResource.volume.setVolume(1.0);
-        }
+        this.cleanup(guildId);
     }
 
     public getQueue(guildId: string): QueueItem[] {
@@ -574,25 +427,36 @@ export class MusicHandler {
     public skip(guildId: string): void {
         const guildData = this.queues.get(guildId);
         if (!guildData) return;
-
-        guildData.audioPlayer.stop(true);
+        guildData.audioPlayer.stop();
     }
 
     public setVolume(guildId: string, volume: number): boolean {
         const guildData = this.queues.get(guildId);
         if (!guildData) return false;
 
-        const normalizedVolume = Math.max(0, Math.min(2, volume));
-        guildData.filters.volume = normalizedVolume;
+        volume = Math.max(0, Math.min(2, volume));
+        guildData.filters.volume = volume;
 
         if (guildData.currentResource?.volume) {
-            const finalVolume = guildData.filters.bassboost 
-                ? normalizedVolume * 1.5 
-                : normalizedVolume;
-            guildData.currentResource.volume.setVolume(finalVolume);
+            guildData.currentResource.volume.setVolume(volume);
             return true;
         }
-
         return false;
+    }
+
+    public toggleBassboost(guildId: string): boolean {
+        const guildData = this.queues.get(guildId);
+        if (!guildData) return false;
+
+        guildData.filters.bassboost = !guildData.filters.bassboost;
+        const volume = guildData.filters.bassboost 
+            ? guildData.filters.volume * 1.5 
+            : guildData.filters.volume;
+
+        if (guildData.currentResource?.volume) {
+            guildData.currentResource.volume.setVolume(volume);
+        }
+
+        return guildData.filters.bassboost;
     }
 }
