@@ -8,9 +8,10 @@ import {
     AudioPlayerStatus,
     VoiceConnectionStatus,
     entersState,
-    NoSubscriberBehavior
+    NoSubscriberBehavior,
+    StreamType
 } from '@discordjs/voice';
-import { stream, video_info } from 'play-dl';
+import ytdl from 'ytdl-core';
 import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder } from 'discord.js';
 import { logger } from '../../config/logger.js';
 import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
@@ -167,14 +168,14 @@ export class MusicHandler {
             this.stateManager.setVoiceState(guildId, VoiceActivityType.MUSIC);
             logger.info(`Starting music playback in guild ${guildId}`);
 
-            const videoInfo = await video_info(url);
-            const video = videoInfo.video_details;
+            const videoInfo = await ytdl.getBasicInfo(url);
+            const video = videoInfo.videoDetails;
 
             const queueItem: QueueItem = {
                 url,
                 title: video.title ?? 'Unknown Title',
                 requestedBy,
-                duration: video.durationRaw
+                duration: video.lengthSeconds
             };
 
             guildData.queue.push(queueItem);
@@ -255,17 +256,16 @@ export class MusicHandler {
                 }
             }
 
-            logger.info(`Starting stream for URL: ${nextTrack.url}`);
-            const audioStream = await stream(nextTrack.url, {
-                discordPlayerCompatibility: true,
-                quality: 2  // Force high quality
+            logger.info('Creating stream');
+            const stream = ytdl(nextTrack.url, {
+                filter: 'audioonly',
+                quality: 'highestaudio',
+                highWaterMark: 1 << 25
             });
-            const videoInfo = await video_info(nextTrack.url);
-            logger.info('Stream created successfully');
-
+            
             logger.info('Creating audio resource');
-            guildData.currentResource = createAudioResource(audioStream.stream, {
-                inputType: audioStream.type,
+            guildData.currentResource = createAudioResource(stream, {
+                inputType: StreamType.Arbitrary,
                 inlineVolume: true,
                 silencePaddingFrames: 5
             });
@@ -326,7 +326,7 @@ export class MusicHandler {
                     name: '🎵 Now Playing',
                     iconURL: 'https://i.imgur.com/IbS3k6R.png'  // Music note icon
                 })
-                .setThumbnail(videoInfo.video_details.thumbnails[0].url)
+                .setThumbnail((await ytdl.getBasicInfo(nextTrack.url)).videoDetails.thumbnails[0].url)
                 .addFields(
                     { name: 'Duration', value: nextTrack.duration, inline: true },
                     { name: 'Requested By', value: nextTrack.requestedBy, inline: true }
