@@ -112,22 +112,20 @@ export class MusicHandler {
 
             // Set up voice connection event handlers
             connection.on(VoiceConnectionStatus.Disconnected, async () => {
-                logger.info(`Voice connection disconnected in guild ${guildId}`);
                 try {
                     await Promise.race([
                         entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
                         entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
                     ]);
-                    // Seems to be reconnecting to a new channel
+                    // Seems to be reconnecting to a new channel - ignore disconnect
                 } catch (error) {
-                    // Seems to be a real disconnect
+                    // Seems to be a real disconnect which SHOULDN'T be recovered from
                     connection.destroy();
                     this.cleanup(guildId);
                 }
             });
 
             connection.on(VoiceConnectionStatus.Destroyed, () => {
-                logger.info(`Voice connection destroyed in guild ${guildId}`);
                 this.cleanup(guildId);
             });
 
@@ -225,7 +223,8 @@ export class MusicHandler {
 
             logger.info(`Starting stream for URL: ${nextTrack.url}`);
             const audioStream = await stream(nextTrack.url, {
-                discordPlayerCompatibility: true
+                discordPlayerCompatibility: true,
+                quality: 2  // Force high quality
             });
             const videoInfo = await video_info(nextTrack.url);
             logger.info('Stream created successfully');
@@ -247,7 +246,14 @@ export class MusicHandler {
             }
 
             logger.info('Starting playback');
-            guildData.audioPlayer.play(guildData.currentResource);
+            try {
+                guildData.audioPlayer.play(guildData.currentResource);
+                await entersState(guildData.audioPlayer, AudioPlayerStatus.Playing, 5_000);
+                logger.info('Successfully entered Playing state');
+            } catch (error) {
+                logger.error(error, 'Failed to start playback');
+                throw error;
+            }
 
             // Create rich embed for now playing message
             const embed = new EmbedBuilder()
