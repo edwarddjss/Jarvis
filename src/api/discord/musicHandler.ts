@@ -6,7 +6,9 @@ import {
     createAudioPlayer,
     VoiceConnection,
     AudioPlayerStatus,
-    VoiceConnectionStatus
+    VoiceConnectionStatus,
+    entersState,
+    NoSubscriberBehavior
 } from '@discordjs/voice';
 import { stream, video_info } from 'play-dl';
 import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder } from 'discord.js';
@@ -62,7 +64,11 @@ export class MusicHandler {
         let guildData = this.queues.get(guildId);
 
         if (!guildData) {
-            const audioPlayer = createAudioPlayer();
+            const audioPlayer = createAudioPlayer({
+                behaviors: {
+                    noSubscriber: NoSubscriberBehavior.Play, // Continue playing even without subscribers
+                }
+            });
             guildData = {
                 audioPlayer,
                 connection,
@@ -77,8 +83,26 @@ export class MusicHandler {
                 timeout: null
             };
 
+            // Set up audio player event handlers
             audioPlayer.on(AudioPlayerStatus.Idle, () => {
+                logger.info(`Audio player idle in guild ${guildId}`);
                 this.handleTrackEnd(guildId);
+            });
+
+            audioPlayer.on(AudioPlayerStatus.Playing, () => {
+                logger.info(`Audio player playing in guild ${guildId}`);
+            });
+
+            audioPlayer.on(AudioPlayerStatus.Paused, () => {
+                logger.info(`Audio player paused in guild ${guildId}`);
+            });
+
+            audioPlayer.on(AudioPlayerStatus.Buffering, () => {
+                logger.info(`Audio player buffering in guild ${guildId}`);
+            });
+
+            audioPlayer.on(AudioPlayerStatus.AutoPaused, () => {
+                logger.info(`Audio player auto-paused in guild ${guildId}`);
             });
 
             audioPlayer.on('error', (error) => {
@@ -86,9 +110,20 @@ export class MusicHandler {
                 this.handleTrackEnd(guildId);
             });
 
-            connection.on(VoiceConnectionStatus.Disconnected, () => {
+            // Set up voice connection event handlers
+            connection.on(VoiceConnectionStatus.Disconnected, async () => {
                 logger.info(`Voice connection disconnected in guild ${guildId}`);
-                this.cleanup(guildId);
+                try {
+                    await Promise.race([
+                        entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
+                        entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+                    ]);
+                    // Seems to be reconnecting to a new channel
+                } catch (error) {
+                    // Seems to be a real disconnect
+                    connection.destroy();
+                    this.cleanup(guildId);
+                }
             });
 
             connection.on(VoiceConnectionStatus.Destroyed, () => {
@@ -96,7 +131,14 @@ export class MusicHandler {
                 this.cleanup(guildId);
             });
 
-            connection.subscribe(audioPlayer);
+            // Subscribe the connection to the audio player
+            const subscription = connection.subscribe(audioPlayer);
+            if (!subscription) {
+                logger.error(`Failed to subscribe connection to audio player in guild ${guildId}`);
+                throw new Error('Failed to subscribe connection to audio player');
+            }
+            logger.info(`Successfully subscribed connection to audio player in guild ${guildId}`);
+
             this.queues.set(guildId, guildData);
         }
 
@@ -186,14 +228,17 @@ export class MusicHandler {
             logger.info(`Processing track: ${nextTrack.title} in guild ${guildId}`);
 
             logger.info(`Starting stream for URL: ${nextTrack.url}`);
-            const audioStream = await stream(nextTrack.url);
+            const audioStream = await stream(nextTrack.url, {
+                discordPlayerCompatibility: true
+            });
             const videoInfo = await video_info(nextTrack.url);
             logger.info('Stream created successfully');
 
             logger.info('Creating audio resource');
             guildData.currentResource = createAudioResource(audioStream.stream, {
                 inputType: audioStream.type,
-                inlineVolume: true
+                inlineVolume: true,
+                silencePaddingFrames: 5
             });
             logger.info('Audio resource created');
 
