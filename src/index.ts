@@ -5,6 +5,7 @@ import { Command } from './types';
 import { ElevenLabsConversationalAI } from './api/elevenlabs/conversationalClient.js';
 import { logger } from './config/logger.js';
 import { DISCORD_CONFIG, ELEVENLABS_CONFIG } from './config/config.js';
+import { initializePlayDl } from './config/playDlConfig.js';
 
 declare module 'discord.js' {
   export interface Client {
@@ -26,6 +27,9 @@ client.commands = new Collection();
 
 const init = async () => {
   try {
+    // Initialize play-dl before starting the bot
+    await initializePlayDl();
+    
     console.log('Bot Token:', DISCORD_CONFIG.DISCORD_BOT_TOKEN ? 'Set' : 'Not Set');
     console.log('Bot Token Length:', DISCORD_CONFIG.DISCORD_BOT_TOKEN?.length);
     console.log('ElevenLabs Agent ID:', ELEVENLABS_CONFIG.AGENT_ID ? 'Set' : 'Not Set');
