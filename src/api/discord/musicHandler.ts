@@ -230,6 +230,31 @@ export class MusicHandler {
             guildData.currentItem = nextTrack;
             logger.info(`Processing track: ${nextTrack.title} in guild ${guildId}`);
 
+            // Check voice connection state
+            if (guildData.connection.state.status === VoiceConnectionStatus.Disconnected) {
+                try {
+                    await Promise.race([
+                        entersState(guildData.connection, VoiceConnectionStatus.Ready, 5_000),
+                        entersState(guildData.connection, VoiceConnectionStatus.Signalling, 5_000),
+                    ]);
+                } catch (error) {
+                    logger.error(error, `Failed to reconnect voice connection for guild ${guildId}`);
+                    this.cleanup(guildId);
+                    return;
+                }
+            }
+
+            // Ensure connection is ready
+            if (guildData.connection.state.status !== VoiceConnectionStatus.Ready) {
+                try {
+                    await entersState(guildData.connection, VoiceConnectionStatus.Ready, 5_000);
+                } catch (error) {
+                    logger.error(error, `Voice connection not ready for guild ${guildId}`);
+                    this.cleanup(guildId);
+                    return;
+                }
+            }
+
             logger.info(`Starting stream for URL: ${nextTrack.url}`);
             const audioStream = await stream(nextTrack.url, {
                 discordPlayerCompatibility: true,
@@ -255,10 +280,38 @@ export class MusicHandler {
             }
 
             logger.info('Starting playback');
+            
+            // Set up a promise to detect when we enter Playing state
+            const playingPromise = new Promise<void>((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                    cleanup();
+                    reject(new Error('Timed out waiting for audio to start playing'));
+                }, 10_000); // 10 second timeout
+
+                const cleanup = () => {
+                    clearTimeout(timeout);
+                    guildData.audioPlayer.removeListener(AudioPlayerStatus.Playing, onPlaying);
+                    guildData.audioPlayer.removeListener('error', onError);
+                };
+
+                const onPlaying = () => {
+                    cleanup();
+                    resolve();
+                };
+
+                const onError = (error: Error) => {
+                    cleanup();
+                    reject(error);
+                };
+
+                guildData.audioPlayer.once(AudioPlayerStatus.Playing, onPlaying);
+                guildData.audioPlayer.once('error', onError);
+            });
+
             try {
                 guildData.audioPlayer.play(guildData.currentResource);
-                await entersState(guildData.audioPlayer, AudioPlayerStatus.Playing, 5_000);
-                logger.info('Successfully entered Playing state');
+                await playingPromise;
+                logger.info('Successfully started playback');
             } catch (error) {
                 logger.error(error, 'Failed to start playback');
                 throw error;
