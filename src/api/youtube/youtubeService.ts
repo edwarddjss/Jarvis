@@ -97,7 +97,7 @@ export class YouTubeService {
             try {
                 const stream = await play.stream(url, {
                     discordPlayerCompatibility: true,
-                    quality: 1,
+                    quality: 2, // Try a lower quality setting
                     seek: 0
                 });
                 
