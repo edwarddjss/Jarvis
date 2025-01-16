@@ -106,28 +106,19 @@ export class SpotifyService {
     public async getStreamUrl(trackId: string): Promise<string> {
         try {
             await this.ensureValidToken();
+            const response = await this.spotifyApi.getTrack(trackId);
             
-            // Get the track's streaming URL using Spotify's streaming API
-            const response = await axios.get(`https://api.spotify.com/v1/me/player/currently-playing`, {
+            // Get the track's streaming URL
+            const streamResponse = await axios.get(`${this.SPOTIFY_API_BASE}/me/player/queue/add`, {
                 headers: {
                     'Authorization': `Bearer ${this.accessToken}`
+                },
+                params: {
+                    uri: `spotify:track:${trackId}`
                 }
             });
 
-            if (!response.data || !response.data.item) {
-                throw new Error('No track currently playing');
-            }
-
-            // Start playback of the specific track
-            await axios.put(`https://api.spotify.com/v1/me/player/play`, {
-                uris: [`spotify:track:${trackId}`]
-            }, {
-                headers: {
-                    'Authorization': `Bearer ${this.accessToken}`
-                }
-            });
-
-            // Return the Spotify URL for the track
+            // Return a direct streaming URL for the track
             return `spotify:track:${trackId}`;
         } catch (error) {
             logger.error('Failed to get stream URL:', error);

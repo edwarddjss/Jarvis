@@ -15,11 +15,11 @@ import { Command } from '../types';
 
 const data = new SlashCommandBuilder()
     .setName('play')
-    .setDescription('Play music from Spotify')
+    .setDescription('Play music from YouTube')
     .addStringOption((option: SlashCommandStringOption) => 
         option
             .setName('query')
-            .setDescription('Enter a song name, artist, or Spotify URL')
+            .setDescription('Enter a song name, artist, or YouTube URL')
             .setRequired(true)
             .setAutocomplete(true)
     );
@@ -62,15 +62,15 @@ const command: Command = {
 
             const musicHandler = MusicHandler.getInstance();
 
-            // Check if the input is a Spotify URL
-            const isSpotifyUrl = query.includes('spotify.com');
+            // Check if the input is a YouTube URL
+            const isYoutubeUrl = query.match(/^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\/.+$/);
             
             try {
-                if (isSpotifyUrl) {
+                if (isYoutubeUrl) {
                     await interaction.editReply({
                         content: '🎵 Adding track to queue...'
                     });
-                    await musicHandler.addSpotifyTrack(
+                    await musicHandler.addTrack(
                         interaction.guildId!,
                         connection,
                         channel,
@@ -79,7 +79,7 @@ const command: Command = {
                     );
                 } else {
                     await interaction.editReply({
-                        content: '🔍 Searching Spotify...'
+                        content: '🔍 Searching YouTube...'
                     });
                     await musicHandler.searchAndShowResults(
                         interaction.guildId!,

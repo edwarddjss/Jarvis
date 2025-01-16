@@ -1,12 +1,12 @@
 // src/api/discord/musicHandler.ts
 import { 
     AudioPlayer, 
-    createAudioResource,
-    AudioResource,
-    createAudioPlayer,
-    VoiceConnection,
-    AudioPlayerStatus,
-    VoiceConnectionStatus,
+    AudioPlayerStatus, 
+    AudioResource, 
+    VoiceConnection, 
+    VoiceConnectionStatus, 
+    createAudioPlayer, 
+    createAudioResource, 
     entersState,
     NoSubscriberBehavior,
     StreamType
@@ -14,18 +14,12 @@ import {
 import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType, ButtonInteraction } from 'discord.js';
 import { logger } from '../../config/logger.js';
 import { VoiceStateManager } from './voiceStateManager.js';
-import { SpotifyService } from '../spotify/spotifyService.js';
+import { YouTubeService, YouTubeTrack } from '../youtube/youtubeService.js';
 
 type SendableChannel = TextChannel | NewsChannel | ThreadChannel | DMChannel;
 
-interface QueueItem {
-    url: string;
-    title: string;
+interface QueueItem extends YouTubeTrack {
     requestedBy: string;
-    duration: string;
-    thumbnail?: string;
-    artist?: string;
-    trackId?: string;
 }
 
 interface GuildQueueData {
@@ -47,12 +41,12 @@ export class MusicHandler {
     private queues: Map<string, GuildQueueData>;
     private readonly IDLE_TIMEOUT = 300000; // 5 minutes
     private stateManager: VoiceStateManager;
-    private spotifyService: SpotifyService;
+    private youtubeService: YouTubeService;
 
     private constructor() {
         this.queues = new Map();
         this.stateManager = VoiceStateManager.getInstance();
-        this.spotifyService = SpotifyService.getInstance();
+        this.youtubeService = YouTubeService.getInstance();
     }
 
     public static getInstance(): MusicHandler {
@@ -125,7 +119,7 @@ export class MusicHandler {
         requestedBy: string
     ): Promise<void> {
         try {
-            const tracks = await this.spotifyService.searchTracks(query);
+            const tracks = await this.youtubeService.searchTracks(query);
             
             if (tracks.length === 0) {
                 const embed = new EmbedBuilder()
@@ -138,19 +132,19 @@ export class MusicHandler {
             }
 
             const embed = new EmbedBuilder()
-                .setColor('#1DB954')
+                .setColor('#FF0000')
                 .setTitle('Search Results')
                 .setDescription(`🔍 Results for: "${query}"`)
                 .addFields(
-                    tracks.slice(0, 5).map((track, index) => ({
-                        name: `${index + 1}. ${track.name}`,
-                        value: `👤 ${track.artists.map(a => a.name).join(', ')}\n⏱️ ${this.spotifyService.formatTrackDuration(track.duration_ms)}`
+                    tracks.map((track, index) => ({
+                        name: `${index + 1}. ${track.title}`,
+                        value: `👤 ${track.author.name}\n⏱️ ${track.duration}`
                     }))
                 )
-                .setThumbnail(tracks[0]?.external_urls?.spotify || 'https://i.imgur.com/IbS3k6R.png')
-                .setFooter({ text: 'Select a track within 30 seconds', iconURL: 'https://i.imgur.com/IbS3k6R.png' });
+                .setThumbnail(tracks[0].thumbnail)
+                .setFooter({ text: 'Select a track within 30 seconds' });
 
-            const buttons = tracks.slice(0, 5).map((track, index) => {
+            const buttons = tracks.map((_, index) => {
                 return new ButtonBuilder()
                     .setCustomId(`play_${index}_${guildId}`)
                     .setLabel(`${index + 1}`)
@@ -182,28 +176,23 @@ export class MusicHandler {
 
                 const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
                 const queueItem: QueueItem = {
-                    url: selectedTrack.external_urls.spotify,
-                    title: selectedTrack.name,
-                    requestedBy,
-                    duration: this.spotifyService.formatTrackDuration(selectedTrack.duration_ms),
-                    artist: selectedTrack.artists.map(a => a.name).join(', '),
-                    thumbnail: selectedTrack.external_urls.spotify,
-                    trackId: selectedTrack.id
+                    ...selectedTrack,
+                    requestedBy
                 };
 
                 guildData.queue.push(queueItem);
 
                 const addedEmbed = new EmbedBuilder()
-                    .setColor('#1DB954')
+                    .setColor('#FF0000')
                     .setTitle(queueItem.title)
                     .setURL(queueItem.url)
                     .setDescription(`Added to queue by ${requestedBy}`)
                     .addFields(
-                        { name: 'Artist', value: queueItem.artist || 'Unknown Artist', inline: true },
+                        { name: 'Channel', value: queueItem.author.name, inline: true },
                         { name: 'Duration', value: queueItem.duration, inline: true },
                         { name: 'Position', value: `#${guildData.queue.length}`, inline: true }
                     )
-                    .setThumbnail(queueItem.thumbnail || 'https://i.imgur.com/IbS3k6R.png')
+                    .setThumbnail(queueItem.thumbnail)
                     .setTimestamp();
 
                 await message.edit({ embeds: [embed], components: [] });
@@ -240,7 +229,7 @@ export class MusicHandler {
         }
     }
 
-    public async addSpotifyTrack(
+    public async addTrack(
         guildId: string,
         connection: VoiceConnection,
         textChannel: SendableChannel,
@@ -248,35 +237,30 @@ export class MusicHandler {
         requestedBy: string
     ): Promise<void> {
         try {
-            const track = await this.spotifyService.searchTracks(url);
-            if (!track || track.length === 0) {
+            const tracks = await this.youtubeService.searchTracks(url);
+            if (!tracks || tracks.length === 0) {
                 throw new Error('Track not found');
             }
 
             const guildData = this.getOrCreateGuildData(guildId, connection, textChannel);
             const queueItem: QueueItem = {
-                url: track[0].external_urls.spotify,
-                title: track[0].name,
-                requestedBy,
-                duration: this.spotifyService.formatTrackDuration(track[0].duration_ms),
-                artist: track[0].artists.map(a => a.name).join(', '),
-                thumbnail: track[0].external_urls.spotify,
-                trackId: track[0].id
+                ...tracks[0],
+                requestedBy
             };
 
             guildData.queue.push(queueItem);
 
             const addedEmbed = new EmbedBuilder()
-                .setColor('#1DB954')
+                .setColor('#FF0000')
                 .setTitle(queueItem.title)
                 .setURL(queueItem.url)
                 .setDescription(`Added to queue by ${requestedBy}`)
                 .addFields(
-                    { name: 'Artist', value: queueItem.artist || 'Unknown Artist', inline: true },
+                    { name: 'Channel', value: queueItem.author.name, inline: true },
                     { name: 'Duration', value: queueItem.duration, inline: true },
                     { name: 'Position', value: `#${guildData.queue.length}`, inline: true }
                 )
-                .setThumbnail(queueItem.thumbnail || 'https://i.imgur.com/IbS3k6R.png')
+                .setThumbnail(queueItem.thumbnail)
                 .setTimestamp();
 
             await textChannel.send({ embeds: [addedEmbed] });
@@ -285,12 +269,12 @@ export class MusicHandler {
                 await this.processQueue(guildId);
             }
         } catch (error) {
-            logger.error('Error adding Spotify track:', error);
+            logger.error('Error adding track:', error);
             throw error;
         }
     }
 
-    public async processQueue(guildId: string): Promise<void> {
+    private async processQueue(guildId: string): Promise<void> {
         const guildData = this.queues.get(guildId);
         if (!guildData) return;
 
@@ -318,55 +302,40 @@ export class MusicHandler {
                 }
             }
 
-            // Get track info from Spotify
-            const tracks = await this.spotifyService.searchTracks(nextTrack.url);
-            if (!tracks || tracks.length === 0) {
-                throw new Error('Track not found');
-            }
-
-            const trackId = tracks[0].id;
-            let streamUrl: string;
             try {
-                streamUrl = await this.spotifyService.getStreamUrl(trackId);
+                const stream = await this.youtubeService.getStream(nextTrack.url);
                 
-                // Create a resource from the Spotify stream
-                guildData.currentResource = createAudioResource(streamUrl, {
-                    inputType: StreamType.Opus,
+                guildData.currentResource = createAudioResource(stream.stream, {
+                    inputType: stream.type,
                     inlineVolume: true
                 });
 
                 if (guildData.currentResource.volume) {
-                    const volume = guildData.filters.bassboost 
-                        ? guildData.filters.volume * 1.5 
-                        : guildData.filters.volume;
-                    guildData.currentResource.volume.setVolume(volume);
+                    guildData.currentResource.volume.setVolume(guildData.filters.volume);
                 }
 
-                // Play the track
                 guildData.audioPlayer.play(guildData.currentResource);
 
-                const nowPlayingEmbed = new EmbedBuilder()
-                    .setColor('#1DB954')
+                const playingEmbed = new EmbedBuilder()
+                    .setColor('#FF0000')
                     .setTitle('Now Playing')
-                    .setDescription(`🎵 **${tracks[0].name}** by ${tracks[0].artists.map(a => a.name).join(', ')}`)
+                    .setDescription(`🎵 **${nextTrack.title}**`)
                     .addFields(
-                        { name: 'Duration', value: this.spotifyService.formatTrackDuration(tracks[0].duration_ms), inline: true },
-                        { name: 'Requested By', value: nextTrack.requestedBy, inline: true }
+                        { name: 'Channel', value: nextTrack.author.name, inline: true },
+                        { name: 'Duration', value: nextTrack.duration, inline: true },
+                        { name: 'Requested by', value: nextTrack.requestedBy, inline: true }
                     )
-                    .setThumbnail(tracks[0].album?.images[0]?.url || '')
-                    .setFooter({ 
-                        text: `Volume: ${Math.round(guildData.filters.volume * 100)}% | Bassboost: ${guildData.filters.bassboost ? 'On' : 'Off'}`,
-                        iconURL: 'https://i.imgur.com/IbS3k6R.png'
-                    });
+                    .setThumbnail(nextTrack.thumbnail)
+                    .setTimestamp();
 
-                await guildData.textChannel.send({ embeds: [nowPlayingEmbed] });
+                await guildData.textChannel.send({ embeds: [playingEmbed] });
 
             } catch (error) {
                 logger.error('Error playing track:', error);
                 const errorEmbed = new EmbedBuilder()
                     .setColor('#FF0000')
                     .setTitle('Error')
-                    .setDescription('❌ Failed to play this track. Make sure you have Spotify open and try again.')
+                    .setDescription('❌ Failed to play this track. Skipping to next song...')
                     .setTimestamp();
                 await guildData.textChannel.send({ embeds: [errorEmbed] });
                 this.handleTrackEnd(guildId);
