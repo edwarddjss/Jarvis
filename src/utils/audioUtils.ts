@@ -75,11 +75,11 @@ class AudioUtils {
         // Track this command
         AudioUtils.activeCommands.add(command);
 
-        command.on('start', (cmdline) => {
+        command.on('start', (cmdline: string) => {
           console.log(`FFmpeg command: ${cmdline}`);
         });
 
-        command.on('error', (err) => {
+        command.on('error', (err: Error) => {
           if (!isStreamClosed) {
             // Handle SIGKILL specifically
             if (err.message.includes('SIGKILL')) {
@@ -101,7 +101,7 @@ class AudioUtils {
         const outputStream = command.pipe();
         outputStream.setMaxListeners(20);
 
-        outputStream.on('data', chunk => {
+        outputStream.on('data', (chunk: Buffer) => {
           if (!isStreamClosed) {
             try {
               chunks.push(chunk);
@@ -126,7 +126,7 @@ class AudioUtils {
           }
         });
 
-        outputStream.on('error', (err) => {
+        outputStream.on('error', (err: Error) => {
           if (!isStreamClosed) {
             console.error('Output stream error:', err);
             cleanup();

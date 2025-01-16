@@ -31,9 +31,9 @@ const rest = new REST().setToken(DISCORD_CONFIG.DISCORD_BOT_TOKEN);
 try {
     console.log(`Started refreshing ${commands.length} application (/) commands.`);
 
-    // Register commands globally using CLIENT_ID
+    // Register commands globally using DISCORD_CLIENT_ID
     const data = await rest.put(
-        Routes.applicationCommands(DISCORD_CONFIG.CLIENT_ID),
+        Routes.applicationCommands(DISCORD_CONFIG.DISCORD_CLIENT_ID),
         { body: commands },
     );
 

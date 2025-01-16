@@ -1,6 +1,6 @@
 import play from 'play-dl';
 import { logger } from '../../config/logger.js';
-import { InfoData, PlaylistInfo, SearchResult, SoundCloudTrack, SpotifyTrack, YouTubeVideo } from 'play-dl';
+import type { InfoData, YouTubeVideo } from 'play-dl';
 
 export interface YouTubeTrack {
     id: string;

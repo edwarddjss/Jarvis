@@ -1,10 +1,11 @@
 import { 
-  getVoiceConnection, 
   joinVoiceChannel, 
   VoiceConnection,
   VoiceConnectionStatus,
   entersState,
-  AudioReceiveStream
+  AudioReceiveStream,
+  DiscordGatewayAdapterCreator,
+  getVoiceConnection
 } from '@discordjs/voice';
 import { CommandInteraction, GuildMember } from 'discord.js';
 import { logger } from '../../config/index.js';

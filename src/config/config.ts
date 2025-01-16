@@ -9,8 +9,8 @@ function loadEnv(key: string): string {
 }
 
 export const DISCORD_CONFIG = {
-  DISCORD_BOT_TOKEN: process.env.DISCORD_TOKEN || '',
-  CLIENT_ID: process.env.CLIENT_ID || '',
+  DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN || '',
+  DISCORD_CLIENT_ID: process.env.DISCORD_CLIENT_ID || '',
   DEBUG: process.env.DEBUG === 'true'
 };
 
