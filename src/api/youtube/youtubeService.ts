@@ -86,8 +86,8 @@ export class YouTubeService {
 
             // Get video info first
             const info = await play.video_info(url);
-            if (!info || !info.video_details) {
-                throw new Error('Failed to get video info');
+            if (!info) {
+                throw new Error('Could not get video info');
             }
 
             logger.info(`Got video info for: ${info.video_details.title}`);
@@ -97,10 +97,8 @@ export class YouTubeService {
             try {
                 const stream = await play.stream(url, {
                     discordPlayerCompatibility: true,
-                    quality: 2, // Try a different quality level
-                    seek: 0,
-                    htmldata: true, // Add this option for better reliability
-                    language: 'en-US'
+                    quality: 1,
+                    seek: 0
                 });
                 
                 if (!stream || !stream.stream) {
