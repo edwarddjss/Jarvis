@@ -1,46 +1,51 @@
-import { AudioPlayer } from '@discordjs/voice';
-import { ChatInputCommandInteraction, SlashCommandBuilder } from 'discord.js';
-import { SpeechHandler } from '../api/discord/speech.js';
-import { ElevenLabsConversationalAI } from '../api/elevenlabs/conversationalClient.js';
-import { VoiceConnectionHandler } from '../api/index.js';
+import { 
+    ChatInputCommandInteraction,
+    GuildMember,
+    SlashCommandBuilder
+} from 'discord.js';
 import { logger } from '../config/logger.js';
-import { Embeds } from '../utils/index.js';
+import { Command } from '../types';
+import { VoiceConnectionHandler } from '../api/discord/voiceConnection.js';
 
-export const data = new SlashCommandBuilder()
-  .setName('talk')
-  .setDescription('Unleash an auditory adventure with a voice that echoes from the digital realm.');
+const data = new SlashCommandBuilder()
+    .setName('talk')
+    .setDescription('Join a voice channel');
 
-/**
- * Executes the talk command.
- *
- * @param {CommandInteraction} interaction - The interaction object representing the command execution.
- * @returns {Promise<void>}
- */
-export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
-  try {
-    const audioPlayer = new AudioPlayer();
-    const elevenlabsConvClient = new ElevenLabsConversationalAI(audioPlayer);
-    const connectionHandler = new VoiceConnectionHandler(interaction);
+const command: Command = {
+    data: data.toJSON(),
+    async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+        await interaction.deferReply();
+        
+        try {
+            const member = interaction.member as GuildMember;
+            
+            if (!member?.voice?.channel) {
+                await interaction.editReply({
+                    content: '❌ You must be in a voice channel to use this command!'
+                });
+                return;
+            }
 
-    const connection = await connectionHandler.connect();
-    if (!connection) {
-      return;
+            const connectionHandler = new VoiceConnectionHandler(interaction);
+            const connection = await connectionHandler.connect();
+
+            if (!connection) {
+                await interaction.editReply({
+                    content: '❌ Failed to join voice channel.'
+                });
+                return;
+            }
+
+            await interaction.editReply({
+                content: '🎤 Joined your voice channel!'
+            });
+        } catch (error) {
+            logger.error(error, 'Error in talk command');
+            await interaction.editReply({
+                content: '❌ An error occurred while joining the channel.'
+            });
+        }
     }
+};
 
-    connection.subscribe(audioPlayer);
-
-    const speechHandler = new SpeechHandler(
-      elevenlabsConvClient, 
-      connection,
-      interaction.guildId!
-    );
-    speechHandler.initialize();
-  } catch (error) {
-    logger.error(error, 'Something went wrong during voice mode');
-
-    await interaction.reply({
-      embeds: [Embeds.error('Error', 'An error occurred while starting the voice chat.')],
-      ephemeral: true,
-    });
-  }
-}
+export default command;

@@ -1,38 +1,45 @@
 // src/commands/stop.ts
 import { 
-    CommandInteraction, 
+    ChatInputCommandInteraction, 
     GuildMember, 
     SlashCommandBuilder 
 } from 'discord.js';
 import { logger } from '../config/logger.js';
-import { Embeds } from '../utils/index.js';
+import { Command } from '../types';
 import { MusicHandler } from '../api/discord/musicHandler.js';
 
-export const data = new SlashCommandBuilder()
+const data = new SlashCommandBuilder()
     .setName('stop')
-    .setDescription('Stop the current playback');
+    .setDescription('Stop playing music');
 
-export async function execute(interaction: CommandInteraction): Promise<void> {
-    try {
-        const member = interaction.member as GuildMember;
+const command: Command = {
+    data: data.toJSON(),
+    async execute(interaction: ChatInputCommandInteraction): Promise<void> {
+        await interaction.deferReply();
         
-        if (!member?.voice?.channel) {
+        try {
+            const member = interaction.member as GuildMember;
+            
+            if (!member?.voice?.channel) {
+                await interaction.editReply({
+                    content: '❌ You must be in a voice channel to use this command!'
+                });
+                return;
+            }
+
+            const musicHandler = MusicHandler.getInstance();
+            musicHandler.stop(interaction.guildId!);
+
             await interaction.editReply({
-                content: 'You must be in a voice channel to use this command!'
+                content: '⏹️ Stopped playing music'
             });
-            return;
+        } catch (error) {
+            logger.error(error, 'Error in stop command');
+            await interaction.editReply({
+                content: '❌ An error occurred while stopping the music.'
+            });
         }
-
-        const musicHandler = MusicHandler.getInstance();
-        musicHandler.stop(interaction.guildId!);
-
-        await interaction.editReply({
-            content: '⏹️ Playback has been stopped.'
-        });
-    } catch (error) {
-        logger.error(error, 'Error in stop command');
-        await interaction.editReply({
-            content: 'An error occurred while stopping the playback.'
-        });
     }
-}
+};
+
+export default command;

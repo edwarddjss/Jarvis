@@ -1,4 +1,5 @@
 import axios from 'axios';
+import SpotifyWebApi from 'spotify-web-api-node';
 import { logger } from '../../config/logger.js';
 
 interface SpotifyTokens {
@@ -24,8 +25,16 @@ export class SpotifyService {
     private static instance: SpotifyService;
     private accessToken: string | null = null;
     private tokenExpirationTime: number = 0;
+    private spotifyApi: SpotifyWebApi;
 
-    private constructor() {}
+    private constructor() {
+        this.spotifyApi = new SpotifyWebApi({
+            clientId: process.env.SPOTIFY_CLIENT_ID,
+            clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
+            refreshToken: process.env.SPOTIFY_REFRESH_TOKEN,
+            redirectUri: process.env.SPOTIFY_REDIRECT_URI || 'http://localhost:3000/callback'
+        });
+    }
 
     public static getInstance(): SpotifyService {
         if (!SpotifyService.instance) {
@@ -35,31 +44,11 @@ export class SpotifyService {
     }
 
     private async refreshAccessToken(): Promise<void> {
-        const clientId = process.env.SPOTIFY_CLIENT_ID;
-        const clientSecret = process.env.SPOTIFY_CLIENT_SECRET;
-        const refreshToken = process.env.SPOTIFY_REFRESH_TOKEN;
-
-        if (!clientId || !clientSecret || !refreshToken) {
-            throw new Error('Missing Spotify credentials in environment variables');
-        }
-
         try {
-            const response = await axios.post<SpotifyTokens>(
-                'https://accounts.spotify.com/api/token',
-                new URLSearchParams({
-                    grant_type: 'refresh_token',
-                    refresh_token: refreshToken,
-                }),
-                {
-                    headers: {
-                        'Authorization': `Basic ${Buffer.from(`${clientId}:${clientSecret}`).toString('base64')}`,
-                        'Content-Type': 'application/x-www-form-urlencoded',
-                    },
-                }
-            );
-
-            this.accessToken = response.data.access_token;
-            this.tokenExpirationTime = Date.now() + (response.data.expires_in * 1000);
+            const data = await this.spotifyApi.refreshAccessToken();
+            this.accessToken = data.body.access_token;
+            this.spotifyApi.setAccessToken(data.body.access_token);
+            this.tokenExpirationTime = Date.now() + (data.body.expires_in * 1000);
             logger.info('Successfully refreshed Spotify access token');
         } catch (error) {
             logger.error(error, 'Failed to refresh Spotify access token');
@@ -74,7 +63,7 @@ export class SpotifyService {
         return this.accessToken!;
     }
 
-    private extractTrackId(url: string): string | null {
+    public extractTrackId(url: string): string | null {
         try {
             if (url.includes('spotify.com/track/')) {
                 const match = url.match(/track\/([a-zA-Z0-9]+)/);
@@ -89,40 +78,37 @@ export class SpotifyService {
 
     public async searchTracks(query: string): Promise<SpotifyTrack[]> {
         try {
-            const token = await this.ensureValidToken();
+            await this.ensureValidToken();
 
             // Check if it's a Spotify URL
             const trackId = this.extractTrackId(query);
             if (trackId) {
-                const response = await axios.get<SpotifyTrack>(
-                    `https://api.spotify.com/v1/tracks/${trackId}`,
-                    {
-                        headers: {
-                            'Authorization': `Bearer ${token}`
-                        }
-                    }
-                );
-                return [response.data];
+                const response = await this.spotifyApi.getTrack(trackId);
+                return [response.body];
             }
 
             // Regular search
-            const response = await axios.get<{ tracks: { items: SpotifyTrack[] } }>(
-                `https://api.spotify.com/v1/search`,
-                {
-                    params: {
-                        q: query,
-                        type: 'track',
-                        limit: 5
-                    },
-                    headers: {
-                        'Authorization': `Bearer ${token}`
-                    }
-                }
-            );
-
-            return response.data.tracks.items;
+            const response = await this.spotifyApi.searchTracks(query, { limit: 5 });
+            return response.body.tracks?.items || [];
         } catch (error) {
             logger.error('Failed to search Spotify tracks:', error);
+            throw error;
+        }
+    }
+
+    public async getStreamUrl(trackId: string): Promise<string> {
+        try {
+            await this.ensureValidToken();
+            const response = await this.spotifyApi.getTrack(trackId);
+            
+            // Get the track's preview URL
+            if (!response.body.preview_url) {
+                throw new Error('No preview URL available for this track');
+            }
+
+            return response.body.preview_url;
+        } catch (error) {
+            logger.error('Failed to get stream URL:', error);
             throw error;
         }
     }

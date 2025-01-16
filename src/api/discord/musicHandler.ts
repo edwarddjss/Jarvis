@@ -8,13 +8,13 @@ import {
     AudioPlayerStatus,
     VoiceConnectionStatus,
     entersState,
-    NoSubscriberBehavior
+    NoSubscriberBehavior,
+    StreamType
 } from '@discordjs/voice';
 import { TextChannel, NewsChannel, ThreadChannel, DMChannel, EmbedBuilder, ButtonBuilder, ButtonStyle, ActionRowBuilder, ComponentType, ButtonInteraction } from 'discord.js';
 import { logger } from '../../config/logger.js';
 import { VoiceStateManager } from './voiceStateManager.js';
 import { SpotifyService } from '../spotify/spotifyService.js';
-import { stream } from 'play-dl';
 
 type SendableChannel = TextChannel | NewsChannel | ThreadChannel | DMChannel;
 
@@ -25,6 +25,7 @@ interface QueueItem {
     duration: string;
     thumbnail?: string;
     artist?: string;
+    trackId?: string;
 }
 
 interface GuildQueueData {
@@ -186,7 +187,8 @@ export class MusicHandler {
                     requestedBy,
                     duration: this.spotifyService.formatTrackDuration(selectedTrack.duration_ms),
                     artist: selectedTrack.artists.map(a => a.name).join(', '),
-                    thumbnail: selectedTrack.external_urls.spotify
+                    thumbnail: selectedTrack.external_urls.spotify,
+                    trackId: selectedTrack.id
                 };
 
                 guildData.queue.push(queueItem);
@@ -258,7 +260,8 @@ export class MusicHandler {
                 requestedBy,
                 duration: this.spotifyService.formatTrackDuration(track[0].duration_ms),
                 artist: track[0].artists.map(a => a.name).join(', '),
-                thumbnail: track[0].external_urls.spotify
+                thumbnail: track[0].external_urls.spotify,
+                trackId: track[0].id
             };
 
             guildData.queue.push(queueItem);
@@ -315,14 +318,17 @@ export class MusicHandler {
                 }
             }
 
+            // Get track info from Spotify
             const tracks = await this.spotifyService.searchTracks(nextTrack.url);
             if (!tracks || tracks.length === 0) {
                 throw new Error('Track not found');
             }
 
-            const audioStream = await stream(tracks[0].external_urls.spotify);
-            guildData.currentResource = createAudioResource(audioStream.stream, {
-                inputType: audioStream.type,
+            const trackId = tracks[0].id;
+            const streamUrl = await this.spotifyService.getStreamUrl(trackId);
+            
+            guildData.currentResource = createAudioResource(streamUrl, {
+                inputType: StreamType.Arbitrary,
                 inlineVolume: true
             });
 
