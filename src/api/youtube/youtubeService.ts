@@ -91,10 +91,7 @@ export class YouTubeService {
             const stream = await play.stream(url, {
                 discordPlayerCompatibility: true,
                 quality: 2, // Lower quality might be more stable
-                seek: 0,
-                language: "en",
-                htmldata: false, // Don't need HTML data
-                backupHost: true // Use backup host if main fails
+                seek: 0
             });
             
             logger.info('Stream created successfully');
