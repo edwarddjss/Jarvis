@@ -94,37 +94,45 @@ export class YouTubeService {
             logger.info(`Video duration: ${info.video_details.durationInSec} seconds`);
 
             // Get the stream with specific options
-            const stream = await play.stream(url, {
-                discordPlayerCompatibility: true,
-                quality: 1,
-                seek: 0
-            });
-            
-            if (!stream || !stream.stream) {
-                throw new Error('Failed to create stream object');
-            }
-
-            logger.info('Stream created successfully');
-
-            // Add error handler to the stream
-            stream.stream
-                .on('error', (error) => {
-                    logger.error('Stream error:', error);
-                })
-                .on('end', () => {
-                    logger.info('Stream ended');
-                })
-                .on('close', () => {
-                    logger.info('Stream closed');
-                })
-                .on('data', () => {
-                    logger.debug('Stream receiving data');
+            try {
+                const stream = await play.stream(url, {
+                    discordPlayerCompatibility: true,
+                    quality: 1,
+                    seek: 0
                 });
-            
-            return {
-                stream: stream.stream,
-                type: StreamType.Opus
-            };
+                
+                if (!stream || !stream.stream) {
+                    throw new Error('Failed to create stream object');
+                }
+
+                logger.info('Stream created successfully');
+
+                // Add error handler to the stream
+                stream.stream
+                    .on('error', (error) => {
+                        logger.error('Stream error:', error);
+                    })
+                    .on('end', () => {
+                        logger.info('Stream ended');
+                    })
+                    .on('close', () => {
+                        logger.info('Stream closed');
+                    })
+                    .on('data', () => {
+                        logger.debug('Stream receiving data');
+                    });
+                
+                return {
+                    stream: stream.stream,
+                    type: StreamType.Opus
+                };
+            } catch (error: any) {
+                if (error.message.includes('Sign in to confirm you\'re not a bot')) {
+                    logger.error('YouTube authentication required. Please set a valid YOUTUBE_COOKIE in your environment variables.');
+                    throw new Error('YouTube authentication required. The bot needs valid credentials to stream music.');
+                }
+                throw error;
+            }
         });
     }
 
