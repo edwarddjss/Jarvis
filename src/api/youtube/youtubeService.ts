@@ -1,7 +1,7 @@
 import play from 'play-dl';
+import { StreamType } from '@discordjs/voice';
 import { logger } from '../../config/logger.js';
 import type { InfoData, YouTubeVideo } from 'play-dl';
-import { StreamType } from '@discordjs/voice';
 
 export interface YouTubeTrack {
     id: string;
@@ -93,40 +93,38 @@ export class YouTubeService {
             logger.info(`Got video info for: ${info.video_details.title}`);
             logger.info(`Video duration: ${info.video_details.durationInSec} seconds`);
 
-            try {
-                // Get the stream with specific options
-                const stream = await play.stream(url, {
-                    discordPlayerCompatibility: true,
-                    quality: 1, // Try a different quality level
-                    seek: 0
-                });
-                
-                if (!stream || !stream.stream) {
-                    throw new Error('Failed to create stream object');
-                }
-
-                logger.info('Stream created successfully');
-
-                // Add error handler to the stream
-                stream.stream.on('error', (error) => {
-                    const errorMessage = error instanceof Error ? error.message : String(error);
-                    logger.error(`Stream error: ${errorMessage}`);
-                });
-
-                // Add data handler to verify stream is working
-                stream.stream.on('data', () => {
-                    logger.debug('Stream is receiving data');
-                });
-                
-                return {
-                    stream: stream.stream,
-                    type: StreamType.Opus
-                };
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                logger.error(`Failed to create stream: ${errorMessage}`);
-                throw error;
+            // Get the stream with specific options
+            const stream = await play.stream(url, {
+                discordPlayerCompatibility: true,
+                quality: 1,
+                seek: 0
+            });
+            
+            if (!stream || !stream.stream) {
+                throw new Error('Failed to create stream object');
             }
+
+            logger.info('Stream created successfully');
+
+            // Add error handler to the stream
+            stream.stream
+                .on('error', (error) => {
+                    logger.error('Stream error:', error);
+                })
+                .on('end', () => {
+                    logger.info('Stream ended');
+                })
+                .on('close', () => {
+                    logger.info('Stream closed');
+                })
+                .on('data', () => {
+                    logger.debug('Stream receiving data');
+                });
+            
+            return {
+                stream: stream.stream,
+                type: StreamType.Opus
+            };
         });
     }
 

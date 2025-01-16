@@ -122,7 +122,7 @@ export class MusicHandler {
                         entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
                     ]);
                 } catch (error) {
-                    logger.error(`Failed to reconnect in guild ${guildId}, cleaning up`);
+                    logger.error(`Failed to reconnect, cleaning up`);
                     this.cleanup(guildId);
                 }
             });
@@ -394,6 +394,18 @@ export class MusicHandler {
                     throw new Error('Failed to create audio resource');
                 }
 
+                // Add resource event handlers
+                guildData.currentResource.playStream
+                    .on('error', error => {
+                        logger.error(`Stream error in guild ${guildId}:`, error);
+                    })
+                    .on('end', () => {
+                        logger.info(`Stream ended in guild ${guildId}`);
+                    })
+                    .on('close', () => {
+                        logger.info(`Stream closed in guild ${guildId}`);
+                    });
+
                 // Set volume if needed
                 if (guildData.currentResource.volume) {
                     guildData.currentResource.volume.setVolume(guildData.filters.volume);
@@ -408,9 +420,11 @@ export class MusicHandler {
                 await new Promise((resolve, reject) => {
                     const timeout = setTimeout(() => {
                         reject(new Error('Timed out waiting for playback to start'));
-                    }, 10000);
+                    }, 15000);
 
                     const onStateChange = (oldState: any, newState: any) => {
+                        logger.info(`Player state changed in guild ${guildId}: ${oldState.status} -> ${newState.status}`);
+                        
                         if (newState.status === AudioPlayerStatus.Playing) {
                             clearTimeout(timeout);
                             guildData.audioPlayer.off('stateChange', onStateChange);
@@ -422,7 +436,21 @@ export class MusicHandler {
                         }
                     };
 
+                    // Also listen for errors
+                    const onError = (error: any) => {
+                        logger.error(`Player error in guild ${guildId}:`, error);
+                        clearTimeout(timeout);
+                        guildData.audioPlayer.off('stateChange', onStateChange);
+                        guildData.audioPlayer.off('error', onError);
+                        reject(new Error('Audio player encountered an error'));
+                    };
+
                     guildData.audioPlayer.on('stateChange', onStateChange);
+                    guildData.audioPlayer.on('error', onError);
+
+                    // Check current state
+                    const currentState = guildData.audioPlayer.state.status;
+                    logger.info(`Current player state in guild ${guildId}: ${currentState}`);
                 });
 
                 logger.info(`Successfully started playing ${nextTrack.title} in guild ${guildId}`);
