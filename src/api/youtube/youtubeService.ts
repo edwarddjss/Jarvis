@@ -53,7 +53,27 @@ export class YouTubeService {
 
     public async getStream(url: string) {
         try {
-            const stream = await play.stream(url);
+            logger.info(`Getting stream for URL: ${url}`);
+            
+            // First validate the URL
+            const validateResult = await play.validate(url);
+            logger.info(`URL validation result: ${validateResult}`);
+            
+            if (validateResult !== 'yt_video') {
+                throw new Error('Invalid YouTube URL');
+            }
+
+            // Get video info first
+            const info = await play.video_info(url);
+            logger.info(`Got video info for: ${info.video_details.title}`);
+
+            // Get the stream
+            const stream = await play.stream(url, {
+                discordPlayerCompatibility: true
+            });
+            
+            logger.info('Stream created successfully');
+            
             return {
                 stream: stream.stream,
                 type: StreamType.Opus

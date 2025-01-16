@@ -300,7 +300,10 @@ export class MusicHandler {
 
     private async processQueue(guildId: string): Promise<void> {
         const guildData = this.queues.get(guildId);
-        if (!guildData) return;
+        if (!guildData) {
+            logger.error(`No guild data found for guild ${guildId}`);
+            return;
+        }
 
         if (guildData.timeout) {
             clearTimeout(guildData.timeout);
@@ -308,6 +311,7 @@ export class MusicHandler {
         }
 
         if (guildData.queue.length === 0) {
+            logger.info(`Queue is empty for guild ${guildId}`);
             this.startIdleTimeout(guildId);
             return;
         }
@@ -316,33 +320,66 @@ export class MusicHandler {
         guildData.currentItem = nextTrack;
 
         try {
+            // Check voice connection
+            if (guildData.connection.state.status === VoiceConnectionStatus.Disconnected) {
+                logger.info(`Attempting to reconnect voice in guild ${guildId}`);
+                try {
+                    await Promise.race([
+                        entersState(guildData.connection, VoiceConnectionStatus.Signalling, 5_000),
+                        entersState(guildData.connection, VoiceConnectionStatus.Connecting, 5_000),
+                    ]);
+                } catch (error) {
+                    logger.error(`Failed to reconnect, cleaning up guild ${guildId}`);
+                    this.cleanup(guildId);
+                    return;
+                }
+            }
+
+            // Wait for Ready state
             if (guildData.connection.state.status !== VoiceConnectionStatus.Ready) {
                 try {
                     logger.info(`Waiting for voice connection to be ready in guild ${guildId}`);
                     await entersState(guildData.connection, VoiceConnectionStatus.Ready, 5_000);
                 } catch (error) {
-                    logger.error('Voice connection not ready');
+                    logger.error(`Voice connection failed to become ready in guild ${guildId}`);
                     this.cleanup(guildId);
                     return;
                 }
             }
 
             try {
+                // Get the stream
                 logger.info(`Getting stream for track ${nextTrack.title} in guild ${guildId}`);
                 const stream = await this.youtubeService.getStream(nextTrack.url);
                 
+                // Create the audio resource
                 logger.info(`Creating audio resource for track ${nextTrack.title} in guild ${guildId}`);
                 guildData.currentResource = createAudioResource(stream.stream, {
                     inputType: stream.type,
                     inlineVolume: true
                 });
 
+                if (!guildData.currentResource) {
+                    throw new Error('Failed to create audio resource');
+                }
+
+                // Set volume if needed
                 if (guildData.currentResource.volume) {
                     guildData.currentResource.volume.setVolume(guildData.filters.volume);
                 }
 
+                // Play the track
                 logger.info(`Playing track ${nextTrack.title} in guild ${guildId}`);
                 guildData.audioPlayer.play(guildData.currentResource);
+
+                // Verify the audio player is playing
+                try {
+                    await entersState(guildData.audioPlayer, AudioPlayerStatus.Playing, 5_000);
+                    logger.info(`Successfully started playing ${nextTrack.title} in guild ${guildId}`);
+                } catch (error) {
+                    logger.error(`Failed to enter Playing state in guild ${guildId}`);
+                    throw error;
+                }
 
                 const playingEmbed = new EmbedBuilder()
                     .setColor('#FF0000')
@@ -360,10 +397,11 @@ export class MusicHandler {
 
             } catch (error) {
                 logger.error('Error playing track:', error);
+                const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
                 const errorEmbed = new EmbedBuilder()
                     .setColor('#FF0000')
                     .setTitle('Error')
-                    .setDescription('❌ Failed to play this track. Skipping to next song...')
+                    .setDescription(`❌ Failed to play this track: ${errorMessage}. Skipping to next song...`)
                     .setTimestamp();
                 await guildData.textChannel.send({ embeds: [errorEmbed] });
                 this.handleTrackEnd(guildId);
@@ -371,10 +409,11 @@ export class MusicHandler {
             }
         } catch (error) {
             logger.error('Error processing queue:', error);
+            const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
             const errorEmbed = new EmbedBuilder()
                 .setColor('#FF0000')
                 .setTitle('Error')
-                .setDescription('❌ Failed to play track. Skipping to next song...')
+                .setDescription(`❌ Failed to play track: ${errorMessage}. Skipping to next song...`)
                 .setTimestamp();
             await guildData.textChannel.send({ embeds: [errorEmbed] });
             guildData.currentItem = null;
