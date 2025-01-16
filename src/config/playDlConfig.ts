@@ -1,4 +1,5 @@
-import { setToken, getFreeClientID, play } from 'play-dl';
+import { setToken, getFreeClientID } from 'play-dl';
+import play from 'play-dl';
 import { logger } from './logger.js';
 
 export async function initializePlayDl() {
