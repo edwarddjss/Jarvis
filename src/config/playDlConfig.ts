@@ -18,7 +18,14 @@ export async function initializePlayDl() {
                 client_id: clientID || process.env.SOUNDCLOUD_CLIENT_ID || ''
             },
             youtube: {
-                cookie: process.env.YOUTUBE_COOKIE || ''
+                cookie: process.env.YOUTUBE_COOKIE || '',
+                // @ts-ignore - These options are actually supported by play-dl but not in their types
+                disable_web_requests: false,
+                request_options: {
+                    headers: {
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                    }
+                }
             }
         });
 
