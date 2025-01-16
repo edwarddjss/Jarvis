@@ -347,16 +347,27 @@ export class MusicHandler {
                 }
             }
 
+            // Subscribe the connection to the audio player if not already
+            if (!guildData.connection.subscribe(guildData.audioPlayer)) {
+                logger.error(`Failed to subscribe connection to audio player in guild ${guildId}`);
+                throw new Error('Failed to subscribe to audio player');
+            }
+
             try {
                 // Get the stream
                 logger.info(`Getting stream for track ${nextTrack.title} in guild ${guildId}`);
                 const stream = await this.youtubeService.getStream(nextTrack.url);
                 
+                if (!stream || !stream.stream) {
+                    throw new Error('Failed to get valid stream');
+                }
+
                 // Create the audio resource
                 logger.info(`Creating audio resource for track ${nextTrack.title} in guild ${guildId}`);
                 guildData.currentResource = createAudioResource(stream.stream, {
                     inputType: stream.type,
-                    inlineVolume: true
+                    inlineVolume: true,
+                    silencePaddingFrames: 5 // Add some silence padding
                 });
 
                 if (!guildData.currentResource) {
@@ -367,6 +378,11 @@ export class MusicHandler {
                 if (guildData.currentResource.volume) {
                     guildData.currentResource.volume.setVolume(guildData.filters.volume);
                 }
+
+                // Add error handler for the resource
+                guildData.currentResource.playStream.on('error', (error) => {
+                    logger.error(`Playback error in guild ${guildId}:`, error);
+                });
 
                 // Play the track
                 logger.info(`Playing track ${nextTrack.title} in guild ${guildId}`);

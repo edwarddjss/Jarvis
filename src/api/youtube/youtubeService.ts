@@ -51,8 +51,28 @@ export class YouTubeService {
         }
     }
 
+    private async retry<T>(operation: () => Promise<T>, maxAttempts: number = 3): Promise<T> {
+        let lastError: Error | null = null;
+        
+        for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+            try {
+                return await operation();
+            } catch (error) {
+                lastError = error instanceof Error ? error : new Error(String(error));
+                logger.error(`Attempt ${attempt}/${maxAttempts} failed:`, error);
+                
+                if (attempt < maxAttempts) {
+                    const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            }
+        }
+        
+        throw lastError || new Error('Operation failed after all attempts');
+    }
+
     public async getStream(url: string) {
-        try {
+        return this.retry(async () => {
             logger.info(`Getting stream for URL: ${url}`);
             
             // First validate the URL
@@ -67,21 +87,28 @@ export class YouTubeService {
             const info = await play.video_info(url);
             logger.info(`Got video info for: ${info.video_details.title}`);
 
-            // Get the stream
+            // Get the stream with specific options
             const stream = await play.stream(url, {
-                discordPlayerCompatibility: true
+                discordPlayerCompatibility: true,
+                quality: 2, // Lower quality might be more stable
+                seek: 0,
+                language: "en",
+                htmldata: false, // Don't need HTML data
+                backupHost: true // Use backup host if main fails
             });
             
             logger.info('Stream created successfully');
+
+            // Add error handler to the stream
+            stream.stream.on('error', (error) => {
+                logger.error('Stream error:', error);
+            });
             
             return {
                 stream: stream.stream,
                 type: StreamType.Opus
             };
-        } catch (error) {
-            logger.error('Failed to get YouTube stream:', error);
-            throw error;
-        }
+        });
     }
 
     private formatDuration(seconds: number): string {
