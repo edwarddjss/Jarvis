@@ -347,11 +347,31 @@ export class MusicHandler {
                 }
             }
 
-            // Subscribe the connection to the audio player if not already
-            if (!guildData.connection.subscribe(guildData.audioPlayer)) {
-                logger.error(`Failed to subscribe connection to audio player in guild ${guildId}`);
+            // Create a new audio player if needed
+            if (!guildData.audioPlayer) {
+                guildData.audioPlayer = createAudioPlayer({
+                    behaviors: {
+                        noSubscriber: NoSubscriberBehavior.Play,
+                        maxMissedFrames: 50
+                    }
+                });
+
+                // Set up audio player event handlers
+                guildData.audioPlayer.on('stateChange', (oldState, newState) => {
+                    logger.info(`Audio player state changed in guild ${guildId}: ${oldState.status} -> ${newState.status}`);
+                });
+
+                guildData.audioPlayer.on('error', error => {
+                    logger.error(`Error in audio player for guild ${guildId}:`, error);
+                });
+            }
+
+            // Subscribe the connection to the audio player
+            const subscription = guildData.connection.subscribe(guildData.audioPlayer);
+            if (!subscription) {
                 throw new Error('Failed to subscribe to audio player');
             }
+            logger.info(`Successfully subscribed connection to audio player in guild ${guildId}`);
 
             try {
                 // Get the stream
@@ -367,7 +387,7 @@ export class MusicHandler {
                 guildData.currentResource = createAudioResource(stream.stream, {
                     inputType: stream.type,
                     inlineVolume: true,
-                    silencePaddingFrames: 5 // Add some silence padding
+                    silencePaddingFrames: 5
                 });
 
                 if (!guildData.currentResource) {
@@ -379,23 +399,33 @@ export class MusicHandler {
                     guildData.currentResource.volume.setVolume(guildData.filters.volume);
                 }
 
-                // Add error handler for the resource
-                guildData.currentResource.playStream.on('error', (error) => {
-                    logger.error(`Playback error in guild ${guildId}:`, error);
-                });
-
                 // Play the track
                 logger.info(`Playing track ${nextTrack.title} in guild ${guildId}`);
                 guildData.audioPlayer.play(guildData.currentResource);
 
-                // Verify the audio player is playing
-                try {
-                    await entersState(guildData.audioPlayer, AudioPlayerStatus.Playing, 5_000);
-                    logger.info(`Successfully started playing ${nextTrack.title} in guild ${guildId}`);
-                } catch (error) {
-                    logger.error(`Failed to enter Playing state in guild ${guildId}`);
-                    throw error;
-                }
+                // Wait for the player to start playing
+                logger.info(`Waiting for player to start in guild ${guildId}`);
+                await new Promise((resolve, reject) => {
+                    const timeout = setTimeout(() => {
+                        reject(new Error('Timed out waiting for playback to start'));
+                    }, 10000);
+
+                    const onStateChange = (oldState: any, newState: any) => {
+                        if (newState.status === AudioPlayerStatus.Playing) {
+                            clearTimeout(timeout);
+                            guildData.audioPlayer.off('stateChange', onStateChange);
+                            resolve(true);
+                        } else if (newState.status === AudioPlayerStatus.Idle) {
+                            clearTimeout(timeout);
+                            guildData.audioPlayer.off('stateChange', onStateChange);
+                            reject(new Error('Player entered Idle state before Playing'));
+                        }
+                    };
+
+                    guildData.audioPlayer.on('stateChange', onStateChange);
+                });
+
+                logger.info(`Successfully started playing ${nextTrack.title} in guild ${guildId}`);
 
                 const playingEmbed = new EmbedBuilder()
                     .setColor('#FF0000')
