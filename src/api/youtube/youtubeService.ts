@@ -1,5 +1,6 @@
-import { play } from 'play-dl';
+import play from 'play-dl';
 import { logger } from '../../config/logger.js';
+import { InfoData, PlaylistInfo, SearchResult, SoundCloudTrack, SpotifyTrack, YouTubeVideo } from 'play-dl';
 
 export interface YouTubeTrack {
     id: string;
@@ -32,12 +33,12 @@ export class YouTubeService {
                 source: { youtube: "video" }
             });
 
-            return searchResults.map(video => ({
-                id: video.id!,
-                title: video.title!,
+            return searchResults.map((video: YouTubeVideo) => ({
+                id: video.id || '',
+                title: video.title || '',
                 url: video.url,
-                thumbnail: video.thumbnails[0].url,
-                duration: this.formatDuration(video.durationInSec),
+                thumbnail: video.thumbnails[0]?.url || '',
+                duration: this.formatDuration(video.durationInSec || 0),
                 author: {
                     name: video.channel?.name || 'Unknown Artist',
                     url: video.channel?.url || ''
