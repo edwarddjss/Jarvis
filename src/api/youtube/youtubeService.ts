@@ -97,8 +97,10 @@ export class YouTubeService {
             try {
                 const stream = await play.stream(url, {
                     discordPlayerCompatibility: true,
-                    quality: 1,
-                    seek: 0
+                    quality: 2, // Try a different quality level
+                    seek: 0,
+                    htmldata: true, // Add this option for better reliability
+                    language: 'en-US'
                 });
                 
                 if (!stream || !stream.stream) {
@@ -131,6 +133,7 @@ export class YouTubeService {
                     logger.error('YouTube authentication required. Please set a valid YOUTUBE_COOKIE in your environment variables.');
                     throw new Error('YouTube authentication required. The bot needs valid credentials to stream music.');
                 }
+                logger.error('Stream error:', error);
                 throw error;
             }
         });
