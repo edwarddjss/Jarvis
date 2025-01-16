@@ -85,10 +85,27 @@ export class MusicHandler {
             };
 
             this.queues.set(guildId, guildData);
-            connection.subscribe(audioPlayer);
+            
+            // Subscribe the connection to the audio player
+            const subscription = connection.subscribe(audioPlayer);
+            if (!subscription) {
+                logger.error(`Failed to subscribe connection to audio player in guild ${guildId}`);
+                throw new Error('Failed to subscribe to audio player');
+            }
+            logger.info(`Successfully subscribed connection to audio player in guild ${guildId}`);
 
+            // Add audio player event listeners
             audioPlayer.on(AudioPlayerStatus.Idle, () => {
+                logger.info(`Audio player went idle in guild ${guildId}`);
                 this.handleTrackEnd(guildId);
+            });
+
+            audioPlayer.on(AudioPlayerStatus.Playing, () => {
+                logger.info(`Started playing in guild ${guildId}`);
+            });
+
+            audioPlayer.on(AudioPlayerStatus.Buffering, () => {
+                logger.info(`Buffering in guild ${guildId}`);
             });
 
             audioPlayer.on('error', error => {
@@ -96,15 +113,22 @@ export class MusicHandler {
                 this.handleTrackEnd(guildId);
             });
 
+            // Add voice connection event listeners
             connection.on(VoiceConnectionStatus.Disconnected, async () => {
                 try {
+                    logger.info(`Attempting to reconnect in guild ${guildId}`);
                     await Promise.race([
                         entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
                         entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
                     ]);
                 } catch (error) {
+                    logger.error(`Failed to reconnect in guild ${guildId}, cleaning up`);
                     this.cleanup(guildId);
                 }
+            });
+
+            connection.on(VoiceConnectionStatus.Ready, () => {
+                logger.info(`Voice connection ready in guild ${guildId}`);
             });
         }
 
@@ -294,6 +318,7 @@ export class MusicHandler {
         try {
             if (guildData.connection.state.status !== VoiceConnectionStatus.Ready) {
                 try {
+                    logger.info(`Waiting for voice connection to be ready in guild ${guildId}`);
                     await entersState(guildData.connection, VoiceConnectionStatus.Ready, 5_000);
                 } catch (error) {
                     logger.error('Voice connection not ready');
@@ -303,8 +328,10 @@ export class MusicHandler {
             }
 
             try {
+                logger.info(`Getting stream for track ${nextTrack.title} in guild ${guildId}`);
                 const stream = await this.youtubeService.getStream(nextTrack.url);
                 
+                logger.info(`Creating audio resource for track ${nextTrack.title} in guild ${guildId}`);
                 guildData.currentResource = createAudioResource(stream.stream, {
                     inputType: stream.type,
                     inlineVolume: true
@@ -314,6 +341,7 @@ export class MusicHandler {
                     guildData.currentResource.volume.setVolume(guildData.filters.volume);
                 }
 
+                logger.info(`Playing track ${nextTrack.title} in guild ${guildId}`);
                 guildData.audioPlayer.play(guildData.currentResource);
 
                 const playingEmbed = new EmbedBuilder()

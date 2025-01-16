@@ -1,6 +1,7 @@
 import play from 'play-dl';
 import { logger } from '../../config/logger.js';
 import type { InfoData, YouTubeVideo } from 'play-dl';
+import { StreamType } from '@discordjs/voice';
 
 export interface YouTubeTrack {
     id: string;
@@ -52,7 +53,11 @@ export class YouTubeService {
 
     public async getStream(url: string) {
         try {
-            return await play.stream(url);
+            const stream = await play.stream(url);
+            return {
+                stream: stream.stream,
+                type: StreamType.Opus
+            };
         } catch (error) {
             logger.error('Failed to get YouTube stream:', error);
             throw error;
