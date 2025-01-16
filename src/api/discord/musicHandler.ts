@@ -325,39 +325,53 @@ export class MusicHandler {
             }
 
             const trackId = tracks[0].id;
-            const streamUrl = await this.spotifyService.getStreamUrl(trackId);
-            
-            guildData.currentResource = createAudioResource(streamUrl, {
-                inputType: StreamType.Arbitrary,
-                inlineVolume: true
-            });
-
-            if (guildData.currentResource.volume) {
-                const volume = guildData.filters.bassboost 
-                    ? guildData.filters.volume * 1.5 
-                    : guildData.filters.volume;
-                guildData.currentResource.volume.setVolume(volume);
-            }
-
-            guildData.audioPlayer.play(guildData.currentResource);
-
-            const nowPlayingEmbed = new EmbedBuilder()
-                .setColor('#1DB954')
-                .setTitle('Now Playing')
-                .setDescription(`🎵 [${nextTrack.title}](${nextTrack.url})`)
-                .addFields(
-                    { name: 'Artist', value: `👤 ${nextTrack.artist || 'Unknown Artist'}`, inline: true },
-                    { name: 'Duration', value: `⏱️ ${nextTrack.duration}`, inline: true },
-                    { name: 'Requested By', value: `👥 ${nextTrack.requestedBy}`, inline: true }
-                )
-                .setThumbnail(nextTrack.thumbnail || 'https://i.imgur.com/IbS3k6R.png')
-                .setFooter({ 
-                    text: `Volume: ${Math.round(guildData.filters.volume * 100)}% | Bassboost: ${guildData.filters.bassboost ? 'On' : 'Off'}`,
-                    iconURL: 'https://i.imgur.com/IbS3k6R.png'
+            let streamUrl: string;
+            try {
+                streamUrl = await this.spotifyService.getStreamUrl(trackId);
+                
+                // Create a resource from the Spotify stream
+                guildData.currentResource = createAudioResource(streamUrl, {
+                    inputType: StreamType.Opus,
+                    inlineVolume: true
                 });
 
-            await guildData.textChannel.send({ embeds: [nowPlayingEmbed] });
+                if (guildData.currentResource.volume) {
+                    const volume = guildData.filters.bassboost 
+                        ? guildData.filters.volume * 1.5 
+                        : guildData.filters.volume;
+                    guildData.currentResource.volume.setVolume(volume);
+                }
 
+                // Play the track
+                guildData.audioPlayer.play(guildData.currentResource);
+
+                const nowPlayingEmbed = new EmbedBuilder()
+                    .setColor('#1DB954')
+                    .setTitle('Now Playing')
+                    .setDescription(`🎵 **${tracks[0].name}** by ${tracks[0].artists.map(a => a.name).join(', ')}`)
+                    .addFields(
+                        { name: 'Duration', value: this.spotifyService.formatTrackDuration(tracks[0].duration_ms), inline: true },
+                        { name: 'Requested By', value: nextTrack.requestedBy, inline: true }
+                    )
+                    .setThumbnail(tracks[0].album?.images[0]?.url || '')
+                    .setFooter({ 
+                        text: `Volume: ${Math.round(guildData.filters.volume * 100)}% | Bassboost: ${guildData.filters.bassboost ? 'On' : 'Off'}`,
+                        iconURL: 'https://i.imgur.com/IbS3k6R.png'
+                    });
+
+                await guildData.textChannel.send({ embeds: [nowPlayingEmbed] });
+
+            } catch (error) {
+                logger.error('Error playing track:', error);
+                const errorEmbed = new EmbedBuilder()
+                    .setColor('#FF0000')
+                    .setTitle('Error')
+                    .setDescription('❌ Failed to play this track. Make sure you have Spotify open and try again.')
+                    .setTimestamp();
+                await guildData.textChannel.send({ embeds: [errorEmbed] });
+                this.handleTrackEnd(guildId);
+                return;
+            }
         } catch (error) {
             logger.error('Error processing queue:', error);
             const errorEmbed = new EmbedBuilder()

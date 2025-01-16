@@ -1,6 +1,6 @@
-import axios from 'axios';
 import SpotifyWebApi from 'spotify-web-api-node';
 import { logger } from '../../config/logger.js';
+import axios from 'axios';
 
 interface SpotifyTokens {
     access_token: string;
@@ -19,6 +19,8 @@ interface SpotifyTrack {
     album?: {
         images: Array<{ url: string }>;
     };
+    uri: string;
+    preview_url?: string | null;
 }
 
 export class SpotifyService {
@@ -26,8 +28,13 @@ export class SpotifyService {
     private accessToken: string | null = null;
     private tokenExpirationTime: number = 0;
     private spotifyApi: SpotifyWebApi;
+    private readonly SPOTIFY_API_BASE = 'https://api.spotify.com/v1';
 
     private constructor() {
+        if (!process.env.SPOTIFY_CLIENT_ID || !process.env.SPOTIFY_CLIENT_SECRET || !process.env.SPOTIFY_REFRESH_TOKEN) {
+            throw new Error('Missing required Spotify credentials');
+        }
+
         this.spotifyApi = new SpotifyWebApi({
             clientId: process.env.SPOTIFY_CLIENT_ID,
             clientSecret: process.env.SPOTIFY_CLIENT_SECRET,
@@ -99,14 +106,29 @@ export class SpotifyService {
     public async getStreamUrl(trackId: string): Promise<string> {
         try {
             await this.ensureValidToken();
-            const response = await this.spotifyApi.getTrack(trackId);
             
-            // Get the track's preview URL
-            if (!response.body.preview_url) {
-                throw new Error('No preview URL available for this track');
+            // Get the track's streaming URL using Spotify's streaming API
+            const response = await axios.get(`https://api.spotify.com/v1/me/player/currently-playing`, {
+                headers: {
+                    'Authorization': `Bearer ${this.accessToken}`
+                }
+            });
+
+            if (!response.data || !response.data.item) {
+                throw new Error('No track currently playing');
             }
 
-            return response.body.preview_url;
+            // Start playback of the specific track
+            await axios.put(`https://api.spotify.com/v1/me/player/play`, {
+                uris: [`spotify:track:${trackId}`]
+            }, {
+                headers: {
+                    'Authorization': `Bearer ${this.accessToken}`
+                }
+            });
+
+            // Return the Spotify URL for the track
+            return `spotify:track:${trackId}`;
         } catch (error) {
             logger.error('Failed to get stream URL:', error);
             throw error;
