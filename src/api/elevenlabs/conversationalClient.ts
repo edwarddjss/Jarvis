@@ -89,10 +89,14 @@ export class ElevenLabsConversationalAI {
   appendInputAudio(buffer: Buffer): void {
     if (buffer.byteLength === 0 || this.socket?.readyState !== WebSocket.OPEN) return;
 
-    const base64Audio = {
-      user_audio_chunk: buffer.toString('base64'),
-    };
-    this.socket?.send(JSON.stringify(base64Audio));
+    try {
+      const base64Audio = {
+        audio: buffer.toString('base64'),
+      };
+      this.socket?.send(JSON.stringify(base64Audio));
+    } catch (error) {
+      logger.error('Error sending audio to ElevenLabs:', error);
+    }
   }
 
   /**

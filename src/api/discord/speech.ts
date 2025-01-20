@@ -11,6 +11,7 @@ class SpeechHandler {
   private client: ElevenLabsConversationalAI;
   private decoder: opus.OpusEncoder;
   private connection: VoiceConnection;
+  private isProcessing: boolean = false;
 
   constructor(
     client: ElevenLabsConversationalAI,
@@ -26,105 +27,86 @@ class SpeechHandler {
 
   /**
    * Initializes the speech handler and sets up event listeners.
-   * @returns {Promise<void>} A promise that resolves when initialization is complete.
    */
   async initialize(): Promise<void> {
     try {
       await this.client.connect();
 
+      // Remove any existing listeners
+      this.connection.receiver.speaking.removeAllListeners();
+
+      // Set up speaking event handler
       this.connection.receiver.speaking.on('start', (userId: string) => {
-        this.handleUserSpeaking(userId, this.connection);
+        if (this.speakingUsers.has(userId)) {
+          // Clean up existing stream if it exists
+          const existingStream = this.speakingUsers.get(userId);
+          if (existingStream) {
+            existingStream.destroy();
+            this.speakingUsers.delete(userId);
+          }
+        }
+
+        const audioStream = this.connection.receiver.subscribe(userId, {
+          end: { behavior: EndBehaviorType.AfterSilence, duration: 500 }
+        });
+
+        this.speakingUsers.set(userId, audioStream);
+
+        // Set up stream event handlers
+        audioStream.on('data', this.handleAudioData.bind(this));
+        audioStream.once('end', () => {
+          audioStream.removeAllListeners();
+          this.speakingUsers.delete(userId);
+          logger.debug(`Audio stream ended for user: ${userId}`);
+        });
       });
 
-      this.connection.on('stateChange', (oldState, newState) => {
+      // Handle connection state changes
+      this.connection.on('stateChange', (_, newState) => {
         if (newState.status === 'disconnected' || newState.status === 'destroyed') {
-          logger.info('Voice connection disconnected or destroyed. Cleaning up.');
           this.cleanup();
         }
       });
 
-      // Listen for speech events
-      this.connection.receiver.speaking.on('start', (userId: string) => {
-        const audioStream = this.connection.receiver.subscribe(userId);
-        this.speakingUsers.set(userId, audioStream);
-
-        audioStream.on('data', (chunk: Buffer) => {
-          try {
-            const pcmBuffer = this.decoder.decode(chunk);
-            this.client.appendInputAudio(pcmBuffer);
-          } catch (error) {
-            logger.error(error, 'Error processing audio for transcription');
-          }
-        });
-
-        audioStream.on('end', () => {
-          this.speakingUsers.delete(userId);
-        });
-      });
-
     } catch (error) {
       logger.error(error, 'Error initializing speech handler');
+      throw error;
     }
   }
 
   /**
-   * Handles a user starting to speak.
-   * @param {string} userId - The ID of the user who is speaking.
-   * @param {VoiceConnection} connection - The voice connection.
-   * @returns {void}
+   * Handles incoming audio data.
    */
-  private handleUserSpeaking(userId: string, connection: VoiceConnection): void {
-    if (this.speakingUsers.has(userId)) return;
+  private handleAudioData(chunk: Buffer): void {
+    if (this.isProcessing) return;
 
-    this.createUserAudioStream(userId, connection);
-  }
-
-  /**
-   * Creates an audio stream for a user.
-   * @param {string} userId - The ID of the user.
-   * @param {VoiceConnection} connection - The voice connection.
-   * @returns {Promise<void>} A promise that resolves when the audio stream is created.
-   */
-  private async createUserAudioStream(userId: string, connection: VoiceConnection): Promise<void> {
     try {
-      const opusAudioStream: AudioReceiveStream = connection.receiver.subscribe(userId, {
-        end: { behavior: EndBehaviorType.Manual },
-      });
-
-      this.speakingUsers.set(userId, opusAudioStream);
-
-      for await (const opusBuffer of opusAudioStream) {
-        this.processAudio(opusBuffer);
-      }
-    } catch (error) {
-      logger.error(error, `Error subscribing to user audio: ${userId}`);
-    }
-  }
-
-  /**
-   * Processes the audio buffer received from a user.
-   * @param {Buffer} opusBuffer - The audio buffer to process.
-   * @returns {void}
-   */
-  private processAudio(opusBuffer: Buffer): void {
-    try {
-      const pcmBuffer = this.decoder.decode(opusBuffer);
+      this.isProcessing = true;
+      const pcmBuffer = this.decoder.decode(chunk);
       this.client.appendInputAudio(pcmBuffer);
     } catch (error) {
       logger.error(error, 'Error processing audio for transcription');
+    } finally {
+      this.isProcessing = false;
     }
   }
 
   /**
    * Cleans up audio streams and disconnects the client.
-   * @returns {void}
    */
   public cleanup(): void {
-    for (const audioStream of this.speakingUsers.values()) {
-      audioStream.push(null);
-      audioStream.destroy();
+    // Clean up all audio streams
+    for (const [userId, stream] of this.speakingUsers) {
+      stream.removeAllListeners();
+      stream.destroy();
+      this.speakingUsers.delete(userId);
     }
-    this.speakingUsers.clear();
+
+    // Remove all connection listeners
+    this.connection.receiver.speaking.removeAllListeners();
+    this.connection.removeAllListeners();
+
+    // Disconnect the client
     this.client.disconnect();
   }
 }
