@@ -3,7 +3,13 @@ import { PassThrough } from 'stream';
 import WebSocket from 'ws';
 import { logger } from '../../config/index.js';
 import { AudioUtils } from '../../utils/index.js';
-import type { AgentResponseEvent, AudioEvent, UserTranscriptEvent } from './types.js';
+import type { 
+  AgentResponseEvent, 
+  AudioEvent, 
+  UserTranscriptEvent,
+  ConversationInitiationMetadata,
+  ElevenLabsEvent
+} from './types.js';
 
 /**
  * Manages the ElevenLabs Conversational AI WebSocket.
@@ -15,6 +21,10 @@ export class ElevenLabsConversationalAI {
   private currentAudioStream: PassThrough | null;
   private audioBufferQueue: Buffer[];
   private isProcessing: boolean;
+  private isListening: boolean;
+  private currentConversationId: string | null;
+  private lastTranscriptTime: number;
+  private readonly TRANSCRIPT_TIMEOUT = 5000; // 5 seconds timeout for transcripts
 
   /**
    * Creates an instance of ElevenLabsConversationalAI.
@@ -35,6 +45,9 @@ export class ElevenLabsConversationalAI {
     this.currentAudioStream = null;
     this.audioBufferQueue = [];
     this.isProcessing = false;
+    this.isListening = false;
+    this.currentConversationId = null;
+    this.lastTranscriptTime = 0;
   }
 
   /**
@@ -66,29 +79,6 @@ export class ElevenLabsConversationalAI {
   }
 
   /**
-   * Cleans up the current audio stream if it exists.
-   * @private
-   */
-  private cleanup(): void {
-    // Clean up audio stream
-    if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
-      this.currentAudioStream.removeAllListeners();
-      this.currentAudioStream.end();
-      this.currentAudioStream.destroy();
-      this.currentAudioStream = null;
-    }
-
-    // Stop audio player
-    if (this.audioPlayer) {
-      this.audioPlayer.stop();
-    }
-
-    // Clear the audio buffer queue
-    this.audioBufferQueue = [];
-    this.isProcessing = false;
-  }
-
-  /**
    * Disconnects from the ElevenLabs WebSocket.
    * @returns {void}
    */
@@ -112,10 +102,24 @@ export class ElevenLabsConversationalAI {
   appendInputAudio(buffer: Buffer): void {
     if (buffer.byteLength === 0 || this.socket?.readyState !== WebSocket.OPEN) return;
 
+    // Start listening mode if not already started
+    if (!this.isListening) {
+      this.isListening = true;
+      this.lastTranscriptTime = Date.now();
+    }
+
     const base64Audio = {
       user_audio_chunk: buffer.toString('base64'),
     };
     this.socket?.send(JSON.stringify(base64Audio));
+
+    // Check for transcript timeout
+    const now = Date.now();
+    if (now - this.lastTranscriptTime > this.TRANSCRIPT_TIMEOUT) {
+      logger.debug('No transcript received for a while, resetting conversation state');
+      this.isListening = false;
+      this.lastTranscriptTime = now;
+    }
   }
 
   /**
@@ -223,36 +227,16 @@ export class ElevenLabsConversationalAI {
   }
 
   /**
-   * Handles events received from the WebSocket.
-   * @param {WebSocket.RawData} message - The raw data message.
-   * @returns {void}
-   */
-  private handleEvent(message: WebSocket.RawData): void {
-    const event = JSON.parse(message.toString());
-
-    switch (event.type) {
-      case 'agent_response':
-        this.handleAgentResponse(event);
-        break;
-      case 'user_transcript':
-        this.handleUserTranscript(event);
-        break;
-      case 'audio':
-        this.handleAudio(event);
-        break;
-      case 'interruption':
-        this.handleInterruption();
-        break;
-    }
-  }
-
-  /**
    * Handles the agent response event.
    * @param {AgentResponseEvent} event - The agent response event.
    * @returns {void}
    */
   private handleAgentResponse(event: AgentResponseEvent): void {
-    logger.info(event);
+    const response = event.agent_response_event.agent_response;
+    logger.info('Agent Response:', response);
+
+    // Reset listening state after agent responds
+    this.isListening = false;
   }
 
   /**
@@ -261,6 +245,80 @@ export class ElevenLabsConversationalAI {
    * @returns {void}
    */
   private handleUserTranscript(event: UserTranscriptEvent): void {
-    logger.info(event);
+    const transcript = event.user_transcription_event.user_transcript;
+    logger.info('User Transcript:', transcript);
+    
+    // Update last transcript time
+    this.lastTranscriptTime = Date.now();
+  }
+
+  /**
+   * Handles conversation initiation metadata.
+   * @param {ConversationInitiationMetadata} event - The metadata event.
+   * @returns {void}
+   */
+  private handleConversationMetadata(event: ConversationInitiationMetadata): void {
+    this.currentConversationId = event.conversation_initiation_metadata_event.conversation_id;
+    logger.info('Conversation started with ID:', this.currentConversationId);
+  }
+
+  /**
+   * Handles events received from the WebSocket.
+   * @param {WebSocket.RawData} message - The raw data message.
+   * @returns {void}
+   */
+  private handleEvent(message: WebSocket.RawData): void {
+    try {
+      const event = JSON.parse(message.toString()) as ElevenLabsEvent;
+
+      switch (event.type) {
+        case 'conversation_initiation_metadata':
+          this.handleConversationMetadata(event);
+          break;
+        case 'agent_response':
+          this.handleAgentResponse(event);
+          break;
+        case 'user_transcript':
+          this.handleUserTranscript(event);
+          break;
+        case 'audio':
+          this.handleAudio(event).catch(error => {
+            logger.error('Error handling audio event:', error);
+          });
+          break;
+        case 'interruption':
+          this.handleInterruption();
+          break;
+        default:
+          logger.warn('Unknown event type:', event.type);
+      }
+    } catch (error) {
+      logger.error('Error parsing WebSocket message:', error);
+    }
+  }
+
+  /**
+   * Cleans up resources and resets conversation state.
+   * @private
+   */
+  private cleanup(): void {
+    // Clean up audio stream
+    if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
+      this.currentAudioStream.removeAllListeners();
+      this.currentAudioStream.end();
+      this.currentAudioStream.destroy();
+      this.currentAudioStream = null;
+    }
+
+    // Stop audio player
+    if (this.audioPlayer) {
+      this.audioPlayer.stop();
+    }
+
+    // Clear the audio buffer queue
+    this.audioBufferQueue = [];
+    this.isProcessing = false;
+    this.isListening = false;
+    this.currentConversationId = null;
   }
 }

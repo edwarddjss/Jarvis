@@ -31,11 +31,11 @@ class VoiceConnectionHandler extends EventEmitter {
   private isSpeaking: boolean = false;
   private silenceTimer: NodeJS.Timeout | null = null;
   private audioLevel: number = 0;
-  private readonly SILENCE_THRESHOLD = 500; // ms to wait before considering speech ended
-  private readonly NOISE_THRESHOLD = -50; // dB threshold for noise
-  private readonly SPEECH_THRESHOLD = -35; // dB threshold for speech
+  private readonly SILENCE_THRESHOLD = 1000; // Increased from 500ms to 1000ms
+  private readonly NOISE_THRESHOLD = -45; // Increased from -50 to -45 dB
+  private readonly SPEECH_THRESHOLD = -30; // Increased from -35 to -30 dB
   private consecutiveNoiseFrames: number = 0;
-  private readonly REQUIRED_NOISE_FRAMES = 3; // Number of consecutive frames needed to confirm speech
+  private readonly REQUIRED_NOISE_FRAMES = 5; // Increased from 3 to 5 frames
   private currentConnection: VoiceConnection | null = null;
   private isForMusic: boolean = false;
   private conversationalAI: ElevenLabsConversationalAI | null = null;
@@ -43,6 +43,8 @@ class VoiceConnectionHandler extends EventEmitter {
   private audioBufferQueue: Buffer[] = [];
   private isProcessing: boolean = false;
   private audioPlayer: AudioPlayer;
+  private lastSpeechEvent: number = 0;
+  private readonly MIN_EVENT_INTERVAL = 500; // Minimum time between speech events in ms
 
   /**
    * Creates an instance of VoiceConnectionHandler.
@@ -166,6 +168,14 @@ class VoiceConnectionHandler extends EventEmitter {
   }
 
   private setupSpeechConnectionHandlers(connection: VoiceConnection) {
+      // Initialize ElevenLabs client immediately for speech mode
+      if (!this.isForMusic && !this.conversationalAI) {
+          this.conversationalAI = new ElevenLabsConversationalAI(this.audioPlayer);
+          this.conversationalAI.connect().catch(error => {
+              logger.error('Failed to connect to ElevenLabs:', error);
+          });
+      }
+
       // Clean up any existing subscriptions
       connection.receiver.speaking.removeAllListeners();
 
@@ -194,6 +204,11 @@ class VoiceConnectionHandler extends EventEmitter {
 
       connection.on(VoiceConnectionStatus.Destroyed, () => {
           this.currentConnection = null;
+          // Clean up ElevenLabs client when connection is destroyed
+          if (this.conversationalAI) {
+              this.conversationalAI.disconnect();
+              this.conversationalAI = null;
+          }
       });
   }
 
@@ -229,24 +244,38 @@ class VoiceConnectionHandler extends EventEmitter {
    * @param {number} audioLevel - The calculated audio level in dB
    */
   private processAudioLevel(audioLevel: number) {
+      const now = Date.now();
+      const timeSinceLastEvent = now - this.lastSpeechEvent;
+
+      // Ignore rapid changes if they occur too soon after the last event
+      if (timeSinceLastEvent < this.MIN_EVENT_INTERVAL) {
+          return;
+      }
+
       if (audioLevel > this.NOISE_THRESHOLD) {
           this.consecutiveNoiseFrames++;
           
           if (audioLevel > this.SPEECH_THRESHOLD && 
-              this.consecutiveNoiseFrames >= this.REQUIRED_NOISE_FRAMES) {
-              if (!this.isSpeaking) {
-                  this.handleSpeechStart();
-              }
-              if (this.silenceTimer) {
-                  clearTimeout(this.silenceTimer);
-                  this.silenceTimer = null;
-              }
+              this.consecutiveNoiseFrames >= this.REQUIRED_NOISE_FRAMES &&
+              !this.isSpeaking) {
+              this.handleSpeechStart();
+              this.lastSpeechEvent = now;
+          }
+
+          // Reset silence timer if we're already speaking
+          if (this.isSpeaking && this.silenceTimer) {
+              clearTimeout(this.silenceTimer);
+              this.silenceTimer = null;
           }
       } else {
-          this.consecutiveNoiseFrames = 0;
+          this.consecutiveNoiseFrames = Math.max(0, this.consecutiveNoiseFrames - 1); // Gradual decrease
+          
           if (this.isSpeaking && !this.silenceTimer) {
               this.silenceTimer = setTimeout(() => {
-                  this.handleSpeechEnd();
+                  if (timeSinceLastEvent >= this.MIN_EVENT_INTERVAL) {
+                      this.handleSpeechEnd();
+                      this.lastSpeechEvent = now;
+                  }
               }, this.SILENCE_THRESHOLD);
           }
       }
@@ -278,14 +307,6 @@ class VoiceConnectionHandler extends EventEmitter {
       this.isSpeaking = true;
       logger.info('Real speech detected');
       this.emit('realSpeechStart');
-      
-      // Initialize ElevenLabs client if not already done
-      if (!this.conversationalAI && !this.isForMusic) {
-          this.conversationalAI = new ElevenLabsConversationalAI(this.audioPlayer);
-          this.conversationalAI.connect().catch(error => {
-              logger.error('Failed to connect to ElevenLabs:', error);
-          });
-      }
   }
 
   /**
