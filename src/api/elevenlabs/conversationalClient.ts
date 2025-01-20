@@ -57,21 +57,66 @@ export class ElevenLabsConversationalAI {
   public async connect(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       logger.info('Establishing connection to ElevenLabs Conversational WebSocket...');
+      
+      // Clean up any existing connection
+      if (this.socket) {
+        this.socket.removeAllListeners();
+        this.socket.close();
+        this.socket = null;
+      }
+
       this.socket = new WebSocket(this.url);
+
+      // Set a connection timeout
+      const connectionTimeout = setTimeout(() => {
+        if (this.socket?.readyState !== WebSocket.OPEN) {
+          this.socket?.close();
+          reject(new Error('WebSocket connection timeout'));
+        }
+      }, 10000); // 10 second timeout
 
       this.socket.on('open', () => {
         logger.info('Successfully connected to ElevenLabs Conversational WebSocket.');
+        clearTimeout(connectionTimeout);
+        
+        // Send initial configuration
+        const initMessage = {
+          text: "Hello! I'm here to help. What would you like to talk about?",
+          model_id: process.env.AGENT_ID,
+          voice_settings: {
+            stability: 0.5,
+            similarity_boost: 0.75
+          }
+        };
+        
+        if (this.socket?.readyState === WebSocket.OPEN) {
+          this.socket.send(JSON.stringify(initMessage));
+          logger.info('Sent initial configuration');
+        }
+        
         resolve();
       });
 
       this.socket.on('error', error => {
-        logger.error(error, 'WebSocket encountered an error');
-        reject(new Error(`Error during WebSocket connection: ${error.message}`));
+        clearTimeout(connectionTimeout);
+        logger.error('WebSocket encountered an error:', error);
+        reject(new Error(`WebSocket connection error: ${error.message}`));
       });
 
       this.socket.on('close', (code: number, reason: string) => {
+        clearTimeout(connectionTimeout);
         logger.info(`ElevenLabs WebSocket closed with code ${code}. Reason: ${reason}`);
         this.cleanup();
+        
+        // Only attempt to reconnect if it wasn't a normal closure
+        if (code !== 1000 && code !== 1001) {
+          logger.info('Attempting to reconnect...');
+          setTimeout(() => {
+            this.connect().catch(error => {
+              logger.error('Failed to reconnect:', error);
+            });
+          }, 1000);
+        }
       });
 
       this.socket.on('message', message => this.handleEvent(message));
@@ -127,12 +172,18 @@ export class ElevenLabsConversationalAI {
         this.lastTranscriptTime = Date.now();
       }
 
-      const base64Audio = {
-        user_audio_chunk: validBuffer.toString('base64'),
+      // Format matches ElevenLabs WebSocket API
+      const audioMessage = {
+        audio: validBuffer.toString('base64'),
+        model_id: process.env.AGENT_ID,
+        voice_settings: {
+          stability: 0.5,
+          similarity_boost: 0.75
+        }
       };
 
       if (this.socket?.readyState === WebSocket.OPEN) {
-        this.socket.send(JSON.stringify(base64Audio));
+        this.socket.send(JSON.stringify(audioMessage));
       }
 
       // Check for transcript timeout
@@ -170,13 +221,14 @@ export class ElevenLabsConversationalAI {
       // Handle stream errors
       this.currentAudioStream.on('error', (error) => {
         logger.error('Audio stream error:', error);
-        this.cleanup();
+        // Don't call cleanup here - just log the error
+        // The stream will be recreated on next initialization
       });
 
       // Handle stream end
       this.currentAudioStream.on('end', () => {
-        logger.debug('Audio stream ended');
-        this.cleanup();
+        logger.debug('Audio stream ended normally');
+        // Don't call cleanup - the stream ending is normal
       });
 
       const resource = createAudioResource(this.currentAudioStream, {
@@ -186,7 +238,7 @@ export class ElevenLabsConversationalAI {
       // Handle audio player errors
       this.audioPlayer.on('error', (error) => {
         logger.error('Audio player error:', error);
-        this.cleanup();
+        // Don't call cleanup - let the player recover
       });
 
       this.audioPlayer.play(resource);
@@ -260,9 +312,24 @@ export class ElevenLabsConversationalAI {
    * @returns {Promise<void>} A promise that resolves when the audio is processed.
    */
   private async handleAudio(message: AudioEvent): Promise<void> {
-    const audioBuffer = Buffer.from(message.audio_event.audio_base_64, 'base64');
-    this.audioBufferQueue.push(audioBuffer);
-    await this.processAudioQueue();
+    try {
+      if (!message.audio_event?.audio_base_64) {
+        logger.warn('Received audio event without base64 data');
+        return;
+      }
+
+      const audioBuffer = Buffer.from(message.audio_event.audio_base_64, 'base64');
+      if (audioBuffer.length === 0) {
+        logger.warn('Decoded audio buffer is empty');
+        return;
+      }
+
+      this.audioBufferQueue.push(audioBuffer);
+      await this.processAudioQueue();
+    } catch (error) {
+      logger.error('Error in handleAudio:', error);
+      throw error; // Let caller handle it
+    }
   }
 
   /**
@@ -271,11 +338,20 @@ export class ElevenLabsConversationalAI {
    * @returns {void}
    */
   private handleAgentResponse(event: AgentResponseEvent): void {
-    const response = event.agent_response_event.agent_response;
-    logger.info('Agent Response:', response);
+    try {
+      const response = event.agent_response_event.agent_response;
+      logger.info('Agent Response:', response);
 
-    // Reset listening state after agent responds
-    this.isListening = false;
+      // Reset listening state after agent responds
+      this.isListening = false;
+
+      // Send a ping to keep connection alive
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        this.socket.send(JSON.stringify({ type: 'ping' }));
+      }
+    } catch (error) {
+      logger.error('Error handling agent response:', error);
+    }
   }
 
   /**
@@ -297,8 +373,25 @@ export class ElevenLabsConversationalAI {
    * @returns {void}
    */
   private handleConversationMetadata(event: ConversationInitiationMetadata): void {
-    this.currentConversationId = event.conversation_initiation_metadata_event.conversation_id;
-    logger.info('Conversation started with ID:', this.currentConversationId);
+    try {
+      this.currentConversationId = event.conversation_initiation_metadata_event.conversation_id;
+      logger.info('Conversation started with ID:', this.currentConversationId);
+
+      // Send initial greeting
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        const greeting = {
+          type: 'user_input',
+          user_input: {
+            text: 'Hello',
+            mode: 'chat'
+          }
+        };
+        this.socket.send(JSON.stringify(greeting));
+        logger.info('Sent initial greeting');
+      }
+    } catch (error) {
+      logger.error('Error handling conversation metadata:', error);
+    }
   }
 
   /**
@@ -308,7 +401,22 @@ export class ElevenLabsConversationalAI {
    */
   private handleEvent(message: WebSocket.RawData): void {
     try {
-      const event = JSON.parse(message.toString()) as ElevenLabsEvent;
+      const rawMessage = message.toString();
+      if (!rawMessage) {
+        logger.warn('Received empty WebSocket message');
+        return;
+      }
+
+      // Log raw message for debugging
+      logger.debug('Raw WebSocket message:', rawMessage);
+
+      const event = JSON.parse(rawMessage) as ElevenLabsEvent;
+      
+      // Validate event has a type
+      if (!event || !event.type) {
+        logger.warn('Received event without type:', event);
+        return;
+      }
 
       switch (event.type) {
         case 'conversation_initiation_metadata':
@@ -328,11 +436,39 @@ export class ElevenLabsConversationalAI {
         case 'interruption':
           this.handleInterruption();
           break;
+        case 'ping':
+          // Handle ping event silently
+          break;
+        case 'error':
+          logger.error('ElevenLabs error:', event.error_event?.error_message || 'Unknown error');
+          break;
         default:
-          logger.warn('Unknown event type:', event.type);
+          logger.warn('Unknown event type:', event.type, 'Full event:', event);
       }
     } catch (error) {
-      logger.error('Error parsing WebSocket message:', error);
+      logger.error('Error parsing WebSocket message:', error, 'Raw message:', message.toString());
+      
+      // Try to reconnect if we're getting parse errors
+      this.handleWebSocketError();
+    }
+  }
+
+  /**
+   * Handles WebSocket errors and attempts reconnection
+   * @private
+   */
+  private handleWebSocketError(): void {
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      logger.info('Attempting to reconnect WebSocket...');
+      this.socket.close();
+      this.socket = null;
+      
+      // Attempt reconnect after a short delay
+      setTimeout(() => {
+        this.connect().catch(error => {
+          logger.error('Failed to reconnect:', error);
+        });
+      }, 1000);
     }
   }
 
