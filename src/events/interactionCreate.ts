@@ -1,4 +1,4 @@
-import { Events, Interaction, ChatInputCommandInteraction } from 'discord.js';
+import { Events, Interaction, ChatInputCommandInteraction, InteractionReplyOptions } from 'discord.js';
 
 export const name = Events.InteractionCreate;
 export async function execute(interaction: Interaction) {
@@ -14,23 +14,23 @@ export async function execute(interaction: Interaction) {
   try {
     // Only defer if it hasn't been deferred already
     if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ ephemeral: true });
+      await interaction.deferReply({ flags: ['Ephemeral'] });
     }
     
     await command.execute(interaction);
   } catch (error) {
     console.error(error);
     
+    const errorResponse: InteractionReplyOptions = {
+      content: 'There was an error executing this command!',
+      flags: ['Ephemeral']
+    };
+
     // Check if already replied
     if (interaction.replied || interaction.deferred) {
-      await interaction.editReply({
-        content: 'There was an error executing this command!'
-      });
+      await interaction.editReply(errorResponse);
     } else {
-      await interaction.reply({
-        content: 'There was an error executing this command!',
-        ephemeral: true
-      });
+      await interaction.reply(errorResponse);
     }
   }
 }

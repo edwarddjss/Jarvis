@@ -16,7 +16,6 @@ const command: Command = {
     data: data.toJSON(),
     async execute(interaction: ChatInputCommandInteraction): Promise<void> {
         try {
-            await interaction.deferReply();
             const member = interaction.member as GuildMember;
             const stateManager = VoiceStateManager.getInstance();
             
