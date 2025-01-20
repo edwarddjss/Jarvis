@@ -1,15 +1,10 @@
 import { AudioPlayer, createAudioResource, StreamType } from '@discordjs/voice';
 import { PassThrough } from 'stream';
 import WebSocket from 'ws';
+import { ELEVENLABS_CONFIG } from '../../config/config.js';
 import { logger } from '../../config/index.js';
 import { AudioUtils } from '../../utils/index.js';
-import type { 
-  AgentResponseEvent, 
-  AudioEvent, 
-  UserTranscriptEvent,
-  ConversationInitiationMetadata,
-  ElevenLabsEvent
-} from './types.js';
+import type { AgentResponseEvent, AudioEvent, UserTranscriptEvent } from './types.js';
 
 /**
  * Manages the ElevenLabs Conversational AI WebSocket.
@@ -21,33 +16,18 @@ export class ElevenLabsConversationalAI {
   private currentAudioStream: PassThrough | null;
   private audioBufferQueue: Buffer[];
   private isProcessing: boolean;
-  private isListening: boolean;
-  private currentConversationId: string | null;
-  private lastTranscriptTime: number;
-  private readonly TRANSCRIPT_TIMEOUT = 5000; // 5 seconds timeout for transcripts
 
   /**
    * Creates an instance of ElevenLabsConversationalAI.
    * @param {AudioPlayer} audioPlayer - The audio player instance.
    */
   constructor(audioPlayer: AudioPlayer) {
-    // Ensure the agent ID is not an empty string
-    if (!process.env.AGENT_ID) {
-      throw new Error('AGENT_ID is not set');
-    }
-
-    // Increase max listeners to prevent warnings
-    audioPlayer.setMaxListeners(20);
-
-    this.url = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${process.env.AGENT_ID}`;
+    this.url = `wss://api.elevenlabs.io/v1/convai/conversation?agent_id=${ELEVENLABS_CONFIG.AGENT_ID}`;
     this.audioPlayer = audioPlayer;
     this.socket = null;
     this.currentAudioStream = null;
     this.audioBufferQueue = [];
     this.isProcessing = false;
-    this.isListening = false;
-    this.currentConversationId = null;
-    this.lastTranscriptTime = 0;
   }
 
   /**
@@ -57,50 +37,21 @@ export class ElevenLabsConversationalAI {
   public async connect(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
       logger.info('Establishing connection to ElevenLabs Conversational WebSocket...');
-      
-      // Clean up any existing connection
-      if (this.socket) {
-        this.socket.removeAllListeners();
-        this.socket.close();
-        this.socket = null;
-      }
-
       this.socket = new WebSocket(this.url);
-
-      // Set a connection timeout
-      const connectionTimeout = setTimeout(() => {
-        if (this.socket?.readyState !== WebSocket.OPEN) {
-          this.socket?.close();
-          reject(new Error('WebSocket connection timeout'));
-        }
-      }, 10000); // 10 second timeout
 
       this.socket.on('open', () => {
         logger.info('Successfully connected to ElevenLabs Conversational WebSocket.');
-        clearTimeout(connectionTimeout);
         resolve();
       });
 
       this.socket.on('error', error => {
-        clearTimeout(connectionTimeout);
-        logger.error('WebSocket encountered an error:', error);
-        reject(new Error(`WebSocket connection error: ${error.message}`));
+        logger.error(error, 'WebSocket encountered an error');
+        reject(new Error(`Error during WebSocket connection: ${error.message}`));
       });
 
       this.socket.on('close', (code: number, reason: string) => {
-        clearTimeout(connectionTimeout);
         logger.info(`ElevenLabs WebSocket closed with code ${code}. Reason: ${reason}`);
         this.cleanup();
-        
-        // Only attempt to reconnect if it wasn't a normal closure
-        if (code !== 1000 && code !== 1001) {
-          logger.info('Attempting to reconnect...');
-          setTimeout(() => {
-            this.connect().catch(error => {
-              logger.error('Failed to reconnect:', error);
-            });
-          }, 1000);
-        }
       });
 
       this.socket.on('message', message => this.handleEvent(message));
@@ -108,34 +59,26 @@ export class ElevenLabsConversationalAI {
   }
 
   /**
+   * Cleans up the current audio stream if it exists.
+   * @private
+   */
+  private cleanup(): void {
+    if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
+      this.currentAudioStream.push(null);
+      this.currentAudioStream.destroy();
+      this.currentAudioStream = null;
+    }
+  }
+
+  /**
    * Disconnects from the ElevenLabs WebSocket.
    * @returns {void}
    */
   public disconnect(): void {
-    // Clean up WebSocket
     if (this.socket?.readyState === WebSocket.OPEN) {
-      this.socket.removeAllListeners();
       this.socket.close();
-      this.socket = null;
     }
-
-    // Clean up audio resources
     this.cleanup();
-  }
-
-  /**
-   * Ensures the buffer size is valid for ElevenLabs WebSocket
-   * @private
-   * @param {Buffer} buffer - Input buffer
-   * @returns {Buffer} Adjusted buffer
-   */
-  private ensureValidBufferSize(buffer: Buffer): Buffer {
-    // ElevenLabs expects buffer size to be a multiple of 2 (16-bit samples)
-    if (buffer.length % 2 !== 0) {
-      // Remove last byte to make it even
-      return buffer.slice(0, buffer.length - 1);
-    }
-    return buffer;
   }
 
   /**
@@ -143,59 +86,13 @@ export class ElevenLabsConversationalAI {
    * @param {Buffer} buffer - The audio buffer to append.
    * @returns {void}
    */
-  public appendInputAudio(buffer: Buffer): void {
+  appendInputAudio(buffer: Buffer): void {
     if (buffer.byteLength === 0 || this.socket?.readyState !== WebSocket.OPEN) return;
 
-    try {
-      // Ensure valid buffer size
-      const validBuffer = this.ensureValidBufferSize(buffer);
-
-      // Start listening mode if not already started
-      if (!this.isListening) {
-        this.isListening = true;
-        this.lastTranscriptTime = Date.now();
-
-        // Send initial configuration if this is the start of conversation
-        if (!this.currentConversationId) {
-          const config = {
-            text: "Hello! I'm here to help. What would you like to talk about?",
-            model_id: process.env.AGENT_ID,
-            voice_settings: {
-              stability: 0.5,
-              similarity_boost: 0.75
-            },
-            optimize_streaming_latency: 3
-          };
-          this.socket?.send(JSON.stringify(config));
-        }
-      }
-
-      // Send audio in correct format
-      const message = {
-        type: "audio",
-        input_audio: {
-          data: validBuffer.toString('base64'),
-          type: "audio/pcm",
-          sampling_rate: 44100,
-          bit_depth: 16,
-          channels: 1
-        }
-      };
-
-      if (this.socket?.readyState === WebSocket.OPEN) {
-        this.socket.send(JSON.stringify(message));
-      }
-
-      // Check for transcript timeout
-      const now = Date.now();
-      if (now - this.lastTranscriptTime > this.TRANSCRIPT_TIMEOUT) {
-        logger.debug('No transcript received for a while, resetting conversation state');
-        this.isListening = false;
-        this.lastTranscriptTime = now;
-      }
-    } catch (error) {
-      logger.error('Error sending audio chunk:', error);
-    }
+    const base64Audio = {
+      user_audio_chunk: buffer.toString('base64'),
+    };
+    this.socket?.send(JSON.stringify(base64Audio));
   }
 
   /**
@@ -216,31 +113,11 @@ export class ElevenLabsConversationalAI {
   private initializeAudioStream(): void {
     if (!this.currentAudioStream || this.currentAudioStream.destroyed) {
       this.currentAudioStream = new PassThrough();
-      
-      // Handle stream errors
-      this.currentAudioStream.on('error', (error) => {
-        logger.error('Audio stream error:', error);
-        // Don't call cleanup here - just log the error
-        // The stream will be recreated on next initialization
-      });
-
-      // Handle stream end
-      this.currentAudioStream.on('end', () => {
-        logger.debug('Audio stream ended normally');
-        // Don't call cleanup - the stream ending is normal
-      });
-
-      const resource = createAudioResource(this.currentAudioStream, {
-        inputType: StreamType.Raw,
-      });
-
-      // Handle audio player errors
-      this.audioPlayer.on('error', (error) => {
-        logger.error('Audio player error:', error);
-        // Don't call cleanup - let the player recover
-      });
-
-      this.audioPlayer.play(resource);
+      this.audioPlayer.play(
+        createAudioResource(this.currentAudioStream, {
+          inputType: StreamType.Raw,
+        })
+      );
     }
   }
 
@@ -254,55 +131,18 @@ export class ElevenLabsConversationalAI {
 
     this.isProcessing = true;
 
-    try {
-      while (this.audioBufferQueue.length > 0) {
-        const audioBuffer = this.audioBufferQueue.shift();
-        
-        if (!audioBuffer) {
-          logger.error('Encountered undefined or null audio buffer');
-          continue;
-        }
-
-        try {
-          this.initializeAudioStream();
-          
-          // Ensure valid buffer size before conversion
-          const validBuffer = this.ensureValidBufferSize(audioBuffer);
-          const pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(validBuffer);
-          
-          if (!pcmBuffer || pcmBuffer.length === 0) {
-            logger.error('Audio conversion failed or resulted in empty buffer');
-            continue;
-          }
-
-          // Double check output buffer size
-          if (pcmBuffer.length % 2 !== 0) {
-            logger.warn('Invalid output buffer size, adjusting...');
-            const adjustedBuffer = pcmBuffer.slice(0, pcmBuffer.length - 1);
-            
-            if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
-              const writeResult = this.currentAudioStream.write(adjustedBuffer);
-              if (!writeResult) {
-                await new Promise(resolve => this.currentAudioStream!.once('drain', resolve));
-              }
-            }
-          } else {
-            if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
-              const writeResult = this.currentAudioStream.write(pcmBuffer);
-              if (!writeResult) {
-                await new Promise(resolve => this.currentAudioStream!.once('drain', resolve));
-              }
-            }
-          }
-        } catch (error) {
-          logger.error('Error processing audio buffer:', error);
-          // Continue with next buffer instead of breaking the entire queue
-          continue;
-        }
+    while (this.audioBufferQueue.length > 0) {
+      const audioBuffer = this.audioBufferQueue.shift()!;
+      try {
+        this.initializeAudioStream();
+        const pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(audioBuffer);
+        this.currentAudioStream?.write(pcmBuffer);
+      } catch (error) {
+        logger.error('Error processing audio buffer:', error);
       }
-    } finally {
-      this.isProcessing = false;
     }
+
+    this.isProcessing = false;
   }
 
   /**
@@ -311,26 +151,32 @@ export class ElevenLabsConversationalAI {
    * @returns {Promise<void>} A promise that resolves when the audio is processed.
    */
   private async handleAudio(message: AudioEvent): Promise<void> {
-    try {
-      if (!message.audio_event?.audio_base_64) {
-        logger.warn('Received audio event without base64 data');
-        return;
-      }
+    const audioBuffer = Buffer.from(message.audio_event.audio_base_64, 'base64');
+    this.audioBufferQueue.push(audioBuffer);
+    await this.processAudioQueue();
+  }
 
-      const audioBuffer = Buffer.from(message.audio_event.audio_base_64, 'base64');
-      if (audioBuffer.length === 0) {
-        logger.warn('Decoded audio buffer is empty');
-        return;
-      }
+  /**
+   * Handles events received from the WebSocket.
+   * @param {WebSocket.RawData} message - The raw data message.
+   * @returns {void}
+   */
+  private handleEvent(message: WebSocket.RawData): void {
+    const event = JSON.parse(message.toString());
 
-      // Log that we received audio
-      logger.debug('Received audio response, length:', audioBuffer.length);
-
-      this.audioBufferQueue.push(audioBuffer);
-      await this.processAudioQueue();
-    } catch (error) {
-      logger.error('Error in handleAudio:', error);
-      throw error;
+    switch (event.type) {
+      case 'agent_response':
+        this.handleAgentResponse(event);
+        break;
+      case 'user_transcript':
+        this.handleUserTranscript(event);
+        break;
+      case 'audio':
+        this.handleAudio(event);
+        break;
+      case 'interruption':
+        this.handleInterruption();
+        break;
     }
   }
 
@@ -340,20 +186,7 @@ export class ElevenLabsConversationalAI {
    * @returns {void}
    */
   private handleAgentResponse(event: AgentResponseEvent): void {
-    try {
-      const response = event.agent_response_event.agent_response;
-      logger.info('Agent Response:', response);
-
-      // Reset listening state after agent responds
-      this.isListening = false;
-
-      // Send a ping to keep connection alive
-      if (this.socket?.readyState === WebSocket.OPEN) {
-        this.socket.send(JSON.stringify({ type: 'ping' }));
-      }
-    } catch (error) {
-      logger.error('Error handling agent response:', error);
-    }
+    logger.info(event);
   }
 
   /**
@@ -362,131 +195,6 @@ export class ElevenLabsConversationalAI {
    * @returns {void}
    */
   private handleUserTranscript(event: UserTranscriptEvent): void {
-    const transcript = event.user_transcription_event.user_transcript;
-    logger.info('User Transcript:', transcript);
-    
-    // Update last transcript time
-    this.lastTranscriptTime = Date.now();
-  }
-
-  /**
-   * Handles conversation initiation metadata.
-   * @param {ConversationInitiationMetadata} event - The metadata event.
-   * @returns {void}
-   */
-  private handleConversationMetadata(event: ConversationInitiationMetadata): void {
-    try {
-      this.currentConversationId = event.conversation_initiation_metadata_event.conversation_id;
-      logger.info('Conversation started with ID:', this.currentConversationId);
-
-      // Send initial greeting
-      if (this.socket?.readyState === WebSocket.OPEN) {
-        const greeting = {
-          type: 'user_input',
-          user_input: {
-            text: 'Hello',
-            mode: 'chat'
-          }
-        };
-        this.socket.send(JSON.stringify(greeting));
-        logger.info('Sent initial greeting');
-      }
-    } catch (error) {
-      logger.error('Error handling conversation metadata:', error);
-    }
-  }
-
-  /**
-   * Handles events received from the WebSocket.
-   * @param {WebSocket.RawData} message - The raw data message.
-   * @returns {void}
-   */
-  private handleEvent(message: WebSocket.RawData): void {
-    try {
-      const rawMessage = message.toString();
-      if (!rawMessage) {
-        logger.warn('Received empty WebSocket message');
-        return;
-      }
-
-      // Log raw message for debugging
-      logger.debug('Raw WebSocket message:', rawMessage);
-
-      const event = JSON.parse(rawMessage);
-      
-      // Handle different response formats
-      if (event.audio) {
-        // Direct audio response
-        this.handleAudio({ 
-          type: 'audio',
-          audio_event: {
-            audio_base_64: event.audio,
-            event_id: 0
-          }
-        }).catch(error => {
-          logger.error('Error handling audio response:', error);
-        });
-      } else if (event.type === 'audio') {
-        // Typed audio response
-        this.handleAudio(event).catch(error => {
-          logger.error('Error handling audio event:', error);
-        });
-      } else if (event.error) {
-        // Error response
-        logger.error('ElevenLabs error:', event.error);
-      } else if (event.text) {
-        // Text response
-        logger.info('Received text response:', event.text);
-      } else {
-        logger.warn('Unknown event format:', event);
-      }
-    } catch (error) {
-      logger.error('Error parsing WebSocket message:', error, 'Raw message:', message.toString());
-      this.handleWebSocketError();
-    }
-  }
-
-  /**
-   * Handles WebSocket errors and attempts reconnection
-   * @private
-   */
-  private handleWebSocketError(): void {
-    if (this.socket?.readyState === WebSocket.OPEN) {
-      logger.info('Attempting to reconnect WebSocket...');
-      this.socket.close();
-      this.socket = null;
-      
-      // Attempt reconnect after a short delay
-      setTimeout(() => {
-        this.connect().catch(error => {
-          logger.error('Failed to reconnect:', error);
-        });
-      }, 1000);
-    }
-  }
-
-  /**
-   * Cleans up resources and resets conversation state.
-   * @private
-   */
-  private cleanup(): void {
-    // Clean up audio stream
-    if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
-      this.currentAudioStream.removeAllListeners();
-      this.currentAudioStream.end();
-      this.currentAudioStream.destroy();
-      this.currentAudioStream = null;
-    }
-
-    // Stop audio player
-    if (this.audioPlayer) {
-      this.audioPlayer.stop();
-    }
-
-    // Clear the audio buffer queue
-    this.audioBufferQueue = [];
-    this.isProcessing = false;
-    this.isListening = false;
-    this.currentConversationId = null;
+    logger.info(event);
   }
 }
