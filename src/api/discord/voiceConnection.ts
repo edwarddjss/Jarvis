@@ -78,7 +78,7 @@ class VoiceConnectionHandler extends EventEmitter {
           if (!this.isUserInVoiceChannel()) {
               if (!this.interaction.replied && !this.interaction.deferred) {
                   await this.interaction.reply({
-                      embeds: [Embeds.error('Error', 'You need to be in a voice channel to use this command.')],
+                      content: '❌ You must be in a voice channel to use this command!',
                       ephemeral: true
                   });
               }
@@ -89,7 +89,7 @@ class VoiceConnectionHandler extends EventEmitter {
           if (existingConnection) {
               if (!this.interaction.replied && !this.interaction.deferred) {
                   await this.interaction.reply({
-                      embeds: [Embeds.error('Error', 'Bot is already in a voice channel.')],
+                      content: '❌ Bot is already in a voice channel.',
                       ephemeral: true
                   });
               }
@@ -101,7 +101,7 @@ class VoiceConnectionHandler extends EventEmitter {
               channelId: member.voice.channel!.id,
               guildId: this.interaction.guildId!,
               adapterCreator: member.guild.voiceAdapterCreator,
-              selfDeaf: this.isForMusic, // Deaf for music, not deaf for speech
+              selfDeaf: this.isForMusic, // Only deaf for music mode
               selfMute: false,
           });
 
@@ -118,7 +118,7 @@ class VoiceConnectionHandler extends EventEmitter {
               if (!this.interaction.replied && !this.interaction.deferred) {
                   const message = this.isForMusic ? '🎵 Ready to play music!' : "Let's chat!";
                   await this.interaction.reply({
-                      embeds: [Embeds.success('Connected', message)],
+                      content: message,
                       ephemeral: true
                   });
               }
@@ -131,7 +131,7 @@ class VoiceConnectionHandler extends EventEmitter {
           logger.error(error, 'Error connecting to voice channel');
           if (!this.interaction.replied && !this.interaction.deferred) {
               await this.interaction.reply({
-                  embeds: [Embeds.error('Error', 'An error occurred while connecting to the voice channel.')],
+                  content: '❌ An error occurred while connecting to the voice channel.',
                   ephemeral: true
               });
           }
@@ -150,6 +150,12 @@ class VoiceConnectionHandler extends EventEmitter {
   }
 
   private setupMusicConnectionHandlers(connection: VoiceConnection) {
+      // Subscribe the audio player to the voice connection
+      connection.subscribe(this.audioPlayer);
+
+      // For music, we want to be deaf (don't receive audio)
+      connection.receiver.speaking.removeAllListeners();
+
       connection.on(VoiceConnectionStatus.Disconnected, async () => {
           try {
               await Promise.race([
@@ -168,26 +174,33 @@ class VoiceConnectionHandler extends EventEmitter {
   }
 
   private setupSpeechConnectionHandlers(connection: VoiceConnection) {
+      // For speech, we need to subscribe the audio player for bot responses
+      connection.subscribe(this.audioPlayer);
+
       // Initialize ElevenLabs client immediately for speech mode
-      if (!this.isForMusic && !this.conversationalAI) {
+      if (!this.conversationalAI) {
           this.conversationalAI = new ElevenLabsConversationalAI(this.audioPlayer);
           this.conversationalAI.connect().catch(error => {
               logger.error('Failed to connect to ElevenLabs:', error);
           });
       }
 
-      // Clean up any existing subscriptions
+      // Clean up any existing subscriptions and set up speech detection
       connection.receiver.speaking.removeAllListeners();
 
       connection.receiver.speaking.on('start', (userId) => {
-          const audioStream = connection.receiver.subscribe(userId);
-          // Set higher limit for listeners
-          audioStream.setMaxListeners(20);
-          this.handleAudioStream(audioStream);
+          // Only handle speech if we're not playing music
+          if (!this.isForMusic && this.conversationalAI) {
+              const audioStream = connection.receiver.subscribe(userId);
+              audioStream.setMaxListeners(20);
+              this.handleAudioStream(audioStream);
+          }
       });
 
       connection.receiver.speaking.on('end', (userId) => {
-          this.handleAudioEnd(userId);
+          if (!this.isForMusic) {
+              this.handleAudioEnd(userId);
+          }
       });
 
       connection.on(VoiceConnectionStatus.Disconnected, async () => {
@@ -197,18 +210,15 @@ class VoiceConnectionHandler extends EventEmitter {
                   entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
               ]);
           } catch (error) {
+              this.cleanup();
               connection.destroy();
               this.currentConnection = null;
           }
       });
 
       connection.on(VoiceConnectionStatus.Destroyed, () => {
+          this.cleanup();
           this.currentConnection = null;
-          // Clean up ElevenLabs client when connection is destroyed
-          if (this.conversationalAI) {
-              this.conversationalAI.disconnect();
-              this.conversationalAI = null;
-          }
       });
   }
 
@@ -218,22 +228,29 @@ class VoiceConnectionHandler extends EventEmitter {
    * @param {AudioReceiveStream} audioStream - The audio stream to process
    */
   private handleAudioStream(audioStream: AudioReceiveStream) {
+      // Skip if in music mode
+      if (this.isForMusic) {
+          return;
+      }
+
       // Remove any existing listeners before adding new ones
       audioStream.removeAllListeners();
 
       audioStream.on('data', (chunk: Buffer) => {
-          const audioLevel = this.calculateAudioLevel(chunk);
-          this.processAudioLevel(audioLevel);
-          
-          // Send audio data to ElevenLabs if we're in speech mode
-          if (!this.isForMusic && this.isSpeaking && this.conversationalAI) {
-              this.conversationalAI.appendInputAudio(chunk);
+          // Double check we're still in speech mode
+          if (!this.isForMusic && this.conversationalAI) {
+              const audioLevel = this.calculateAudioLevel(chunk);
+              this.processAudioLevel(audioLevel);
+              
+              // Only send audio to ElevenLabs if we're speaking
+              if (this.isSpeaking) {
+                  this.conversationalAI.appendInputAudio(chunk);
+              }
           }
       });
 
       audioStream.on('end', () => {
           logger.debug('Audio stream ended');
-          // Clean up listeners when stream ends
           audioStream.removeAllListeners();
       });
   }
@@ -247,34 +264,49 @@ class VoiceConnectionHandler extends EventEmitter {
       const now = Date.now();
       const timeSinceLastEvent = now - this.lastSpeechEvent;
 
-      // Ignore rapid changes if they occur too soon after the last event
-      if (timeSinceLastEvent < this.MIN_EVENT_INTERVAL) {
+      // Skip processing if in music mode
+      if (this.isForMusic) {
           return;
       }
 
+      // Always update consecutive frames count based on audio level
       if (audioLevel > this.NOISE_THRESHOLD) {
           this.consecutiveNoiseFrames++;
+      } else {
+          // More gradual decrease to prevent quick toggling
+          this.consecutiveNoiseFrames = Math.max(0, this.consecutiveNoiseFrames - 0.5);
+      }
+
+      // Handle potential speech start
+      if (!this.isSpeaking && 
+          audioLevel > this.SPEECH_THRESHOLD && 
+          this.consecutiveNoiseFrames >= this.REQUIRED_NOISE_FRAMES &&
+          timeSinceLastEvent >= this.MIN_EVENT_INTERVAL) {
           
-          if (audioLevel > this.SPEECH_THRESHOLD && 
-              this.consecutiveNoiseFrames >= this.REQUIRED_NOISE_FRAMES &&
-              !this.isSpeaking) {
+          // Double check we're not in music mode
+          if (!this.isForMusic && this.conversationalAI) {
               this.handleSpeechStart();
               this.lastSpeechEvent = now;
           }
+          return;
+      }
 
-          // Reset silence timer if we're already speaking
-          if (this.isSpeaking && this.silenceTimer) {
-              clearTimeout(this.silenceTimer);
-              this.silenceTimer = null;
-          }
-      } else {
-          this.consecutiveNoiseFrames = Math.max(0, this.consecutiveNoiseFrames - 1); // Gradual decrease
-          
-          if (this.isSpeaking && !this.silenceTimer) {
+      // Handle ongoing speech and potential end
+      if (this.isSpeaking) {
+          if (audioLevel > this.NOISE_THRESHOLD) {
+              // Clear silence timer if there's noise
+              if (this.silenceTimer) {
+                  clearTimeout(this.silenceTimer);
+                  this.silenceTimer = null;
+              }
+          } else if (!this.silenceTimer && timeSinceLastEvent >= this.MIN_EVENT_INTERVAL) {
+              // Start silence timer only if we've waited long enough since last event
               this.silenceTimer = setTimeout(() => {
-                  if (timeSinceLastEvent >= this.MIN_EVENT_INTERVAL) {
+                  // Double check we're still in speech mode
+                  if (!this.isForMusic && this.isSpeaking) {
                       this.handleSpeechEnd();
-                      this.lastSpeechEvent = now;
+                      this.lastSpeechEvent = Date.now();
+                      this.consecutiveNoiseFrames = 0;
                   }
               }, this.SILENCE_THRESHOLD);
           }
@@ -315,8 +347,6 @@ class VoiceConnectionHandler extends EventEmitter {
    */
   private handleSpeechEnd() {
       this.isSpeaking = false;
-      this.consecutiveNoiseFrames = 0;
-      this.silenceTimer = null;
       logger.info('Speech ended');
       this.emit('realSpeechEnd');
   }
@@ -383,20 +413,26 @@ class VoiceConnectionHandler extends EventEmitter {
           this.currentAudioStream = null;
       }
 
+      // Stop audio player
+      if (this.audioPlayer) {
+          this.audioPlayer.stop();
+      }
+
       // Clean up ElevenLabs client
       if (this.conversationalAI) {
           this.conversationalAI.disconnect();
           this.conversationalAI = null;
       }
 
-      // Stop audio player
-      if (this.audioPlayer) {
-          this.audioPlayer.stop();
-      }
-
-      // Clear the audio buffer queue
+      // Reset all state
       this.audioBufferQueue = [];
       this.isProcessing = false;
+      this.isSpeaking = false;
+      this.consecutiveNoiseFrames = 0;
+      if (this.silenceTimer) {
+          clearTimeout(this.silenceTimer);
+          this.silenceTimer = null;
+      }
 
       // Remove all event listeners
       this.removeAllListeners();
