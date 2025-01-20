@@ -61,10 +61,12 @@ class VoiceConnectionHandler {
 
             const existingConnection = getVoiceConnection(this.interaction.guildId!);
             if (existingConnection) {
-                await this.interaction.reply({
-                    embeds: [Embeds.error('Error', 'Bot is already in a voice channel.')],
-                    ephemeral: true,
-                });
+                if (!this.interaction.replied && !this.interaction.deferred) {
+                    await this.interaction.reply({
+                        embeds: [Embeds.error('Error', 'Bot is already in a voice channel.')],
+                        ephemeral: true,
+                    });
+                }
                 return;
             }
 
@@ -86,10 +88,12 @@ class VoiceConnectionHandler {
                 // Set appropriate voice state
                 const voiceState = this.isMusic ? VoiceActivityType.MUSIC : VoiceActivityType.SPEECH;
                 this.stateManager.setVoiceState(this.interaction.guildId!, voiceState);
-
-                await this.interaction.reply({
-                    embeds: [Embeds.success('Connected', "Let's chat!")],
-                });
+  
+                if (!this.interaction.replied && !this.interaction.deferred) {
+                    await this.interaction.reply({
+                        embeds: [Embeds.success('Connected', "Let's chat!")],
+                    });
+                }
                 return connection;
             } catch (error) {
                 connection.destroy();
@@ -98,10 +102,12 @@ class VoiceConnectionHandler {
 
         } catch (error) {
             logger.error(error, 'Error connecting to voice channel');
-            await this.interaction.reply({
-                embeds: [Embeds.error('Error', 'An error occurred while connecting to the voice channel.')],
-                ephemeral: true,
-            });
+            if (!this.interaction.replied && !this.interaction.deferred) {
+                await this.interaction.reply({
+                    embeds: [Embeds.error('Error', 'An error occurred while connecting to the voice channel.')],
+                    ephemeral: true,
+                });
+            }
         }
     }
 

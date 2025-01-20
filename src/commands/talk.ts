@@ -16,6 +16,7 @@ const command: Command = {
     data: data.toJSON(),
     async execute(interaction: ChatInputCommandInteraction): Promise<void> {
         try {
+            await interaction.deferReply();
             const member = interaction.member as GuildMember;
             const stateManager = VoiceStateManager.getInstance();
             
@@ -55,9 +56,7 @@ const command: Command = {
             // Set voice state to speech mode
             stateManager.setVoiceState(interaction.guildId!, VoiceActivityType.SPEECH);
 
-            await interaction.editReply({
-                content: '🎤 Joined your voice channel! I am now listening and will respond when you speak.'
-            });
+            // Connection successful, VoiceConnectionHandler will handle the success message
         } catch (error) {
             logger.error(error, 'Error in talk command');
             await interaction.editReply({
