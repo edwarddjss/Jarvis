@@ -95,30 +95,56 @@ export class ElevenLabsConversationalAI {
   }
 
   /**
+   * Ensures the buffer size is valid for ElevenLabs WebSocket
+   * @private
+   * @param {Buffer} buffer - Input buffer
+   * @returns {Buffer} Adjusted buffer
+   */
+  private ensureValidBufferSize(buffer: Buffer): Buffer {
+    // ElevenLabs expects buffer size to be a multiple of 2 (16-bit samples)
+    if (buffer.length % 2 !== 0) {
+      // Remove last byte to make it even
+      return buffer.slice(0, buffer.length - 1);
+    }
+    return buffer;
+  }
+
+  /**
    * Appends input audio to the WebSocket.
    * @param {Buffer} buffer - The audio buffer to append.
    * @returns {void}
    */
-  appendInputAudio(buffer: Buffer): void {
+  public appendInputAudio(buffer: Buffer): void {
     if (buffer.byteLength === 0 || this.socket?.readyState !== WebSocket.OPEN) return;
 
-    // Start listening mode if not already started
-    if (!this.isListening) {
-      this.isListening = true;
-      this.lastTranscriptTime = Date.now();
-    }
+    try {
+      // Ensure valid buffer size
+      const validBuffer = this.ensureValidBufferSize(buffer);
 
-    const base64Audio = {
-      user_audio_chunk: buffer.toString('base64'),
-    };
-    this.socket?.send(JSON.stringify(base64Audio));
+      // Start listening mode if not already started
+      if (!this.isListening) {
+        this.isListening = true;
+        this.lastTranscriptTime = Date.now();
+      }
 
-    // Check for transcript timeout
-    const now = Date.now();
-    if (now - this.lastTranscriptTime > this.TRANSCRIPT_TIMEOUT) {
-      logger.debug('No transcript received for a while, resetting conversation state');
-      this.isListening = false;
-      this.lastTranscriptTime = now;
+      const base64Audio = {
+        user_audio_chunk: validBuffer.toString('base64'),
+      };
+
+      if (this.socket?.readyState === WebSocket.OPEN) {
+        this.socket.send(JSON.stringify(base64Audio));
+      }
+
+      // Check for transcript timeout
+      const now = Date.now();
+      if (now - this.lastTranscriptTime > this.TRANSCRIPT_TIMEOUT) {
+        logger.debug('No transcript received for a while, resetting conversation state');
+        this.isListening = false;
+        this.lastTranscriptTime = now;
+      }
+    } catch (error) {
+      logger.error('Error sending audio chunk:', error);
+      // Don't throw - we want to keep the connection alive even if one chunk fails
     }
   }
 
@@ -189,21 +215,34 @@ export class ElevenLabsConversationalAI {
         try {
           this.initializeAudioStream();
           
-          const pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(audioBuffer);
+          // Ensure valid buffer size before conversion
+          const validBuffer = this.ensureValidBufferSize(audioBuffer);
+          const pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(validBuffer);
           
           if (!pcmBuffer || pcmBuffer.length === 0) {
             logger.error('Audio conversion failed or resulted in empty buffer');
             continue;
           }
 
-          if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
-            const writeResult = this.currentAudioStream.write(pcmBuffer);
-            if (!writeResult) {
-              // Wait for drain event if buffer is full
-              await new Promise(resolve => this.currentAudioStream!.once('drain', resolve));
+          // Double check output buffer size
+          if (pcmBuffer.length % 2 !== 0) {
+            logger.warn('Invalid output buffer size, adjusting...');
+            const adjustedBuffer = pcmBuffer.slice(0, pcmBuffer.length - 1);
+            
+            if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
+              const writeResult = this.currentAudioStream.write(adjustedBuffer);
+              if (!writeResult) {
+                await new Promise(resolve => this.currentAudioStream!.once('drain', resolve));
+              }
+            }
+          } else {
+            if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
+              const writeResult = this.currentAudioStream.write(pcmBuffer);
+              if (!writeResult) {
+                await new Promise(resolve => this.currentAudioStream!.once('drain', resolve));
+              }
             }
           }
-
         } catch (error) {
           logger.error('Error processing audio buffer:', error);
           // Continue with next buffer instead of breaking the entire queue
