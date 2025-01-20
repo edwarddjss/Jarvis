@@ -5,14 +5,17 @@ import {
   entersState,
   AudioReceiveStream,
   DiscordGatewayAdapterCreator,
-  getVoiceConnection
+  getVoiceConnection,
+  createAudioPlayer,
+  AudioPlayer,
+  NoSubscriberBehavior
 } from '@discordjs/voice';
+import { PassThrough } from 'stream';
 import { CommandInteraction, GuildMember } from 'discord.js';
 import { logger } from '../../config/index.js';
 import { Embeds } from '../../utils/index.js';
 import { ElevenLabsConversationalAI } from '../elevenlabs/conversationalClient.js';
 import { EventEmitter } from 'events';
-import { createAudioPlayer, AudioPlayer, NoSubscriberBehavior, PassThrough } from '@discordjs/voice';
 
 /**
 * Manages voice connections for a Discord bot, handling connection and disconnection from voice channels.
@@ -319,13 +322,27 @@ class VoiceConnectionHandler extends EventEmitter {
   }
 
   /**
+   * Handles audio stream end.
+   * @private
+   * @param {string} userId - The ID of the user who stopped speaking
+   */
+  private handleAudioEnd(userId: string): void {
+      logger.debug(`Audio ended from user: ${userId}`);
+      if (this.isSpeaking) {
+          this.handleSpeechEnd();
+      }
+  }
+
+  /**
    * Emits events for the ConversationalClient to handle.
    * @private
-   * @param {string} event - The name of the event to emit
+   * @param {string} eventName - The name of the event to emit
+   * @param {...any[]} args - Arguments to pass to the event handler
+   * @returns {boolean} True if the event had listeners, false otherwise
    */
-  private emit(event: string) {
-      logger.info(`Emitting event: ${event}`);
-      // Implement your event emission logic here
+  override emit(eventName: string | symbol, ...args: any[]): boolean {
+      logger.info(`Emitting event: ${String(eventName)}`);
+      return super.emit(eventName, ...args);
   }
 
   /**
