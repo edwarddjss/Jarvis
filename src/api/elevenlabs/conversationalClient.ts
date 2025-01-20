@@ -91,10 +91,9 @@ export class ElevenLabsConversationalAI {
 
     try {
       const message = {
-        text: "",
-        user_audio_chunk: buffer.toString('base64'),
-        sample_rate: 16000,
-        is_final: false
+        audio: buffer.toString('base64'),
+        type: "audio",
+        sequence_id: Date.now().toString()
       };
       this.socket?.send(JSON.stringify(message));
     } catch (error) {

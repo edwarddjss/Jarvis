@@ -1,4 +1,3 @@
-import opus from '@discordjs/opus';
 import { AudioReceiveStream, EndBehaviorType, VoiceConnection } from '@discordjs/voice';
 import { logger } from '../../config/index.js';
 import { ElevenLabsConversationalAI } from '../index.js';
@@ -90,7 +89,7 @@ class SpeechHandler {
     try {
       this.isProcessing = true;
       
-      // Convert opus to PCM and resample to 16kHz
+      // Convert audio directly using FFmpeg
       const converted = await this.convertAudio(chunk);
       if (converted) {
         this.client.appendInputAudio(converted);
@@ -103,20 +102,18 @@ class SpeechHandler {
   }
 
   /**
-   * Converts opus audio to PCM with correct sample rate.
+   * Converts audio to correct sample rate.
    * @returns Promise<Buffer | null> The converted audio buffer or null if conversion fails
    */
   private async convertAudio(opusChunk: Buffer): Promise<Buffer | null> {
     try {
       const ffmpeg = spawn('ffmpeg', [
-        '-f', 's16le',        // Input format
-        '-ar', '48000',       // Input sample rate (Discord's opus decoder rate)
-        '-ac', '2',           // Input channels (Discord's opus decoder channels)
+        '-f', 'opus',         // Input format is opus
         '-i', 'pipe:0',       // Input from stdin
         '-f', 's16le',        // Output format
         '-ar', this.TARGET_SAMPLE_RATE.toString(), // Output sample rate for ElevenLabs
         '-ac', '1',           // Output mono audio
-        '-acodec', 'pcm_s16le', // Output codec
+        '-filter:a', 'volume=5.0', // Increase volume
         'pipe:1'              // Output to stdout
       ]);
 
