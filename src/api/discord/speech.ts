@@ -42,6 +42,26 @@ class SpeechHandler {
           this.cleanup();
         }
       });
+
+      // Listen for speech events
+      this.connection.receiver.speaking.on('start', (userId: string) => {
+        const audioStream = this.connection.receiver.subscribe(userId);
+        this.speakingUsers.set(userId, audioStream);
+
+        audioStream.on('data', (chunk: Buffer) => {
+          try {
+            const pcmBuffer = this.decoder.decode(chunk);
+            this.client.appendInputAudio(pcmBuffer);
+          } catch (error) {
+            logger.error(error, 'Error processing audio for transcription');
+          }
+        });
+
+        audioStream.on('end', () => {
+          this.speakingUsers.delete(userId);
+        });
+      });
+
     } catch (error) {
       logger.error(error, 'Error initializing speech handler');
     }
@@ -99,7 +119,7 @@ class SpeechHandler {
    * Cleans up audio streams and disconnects the client.
    * @returns {void}
    */
-  private cleanup(): void {
+  public cleanup(): void {
     for (const audioStream of this.speakingUsers.values()) {
       audioStream.push(null);
       audioStream.destroy();

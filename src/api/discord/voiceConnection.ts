@@ -4,13 +4,18 @@ import {
     VoiceConnection,
     VoiceConnectionStatus,
     entersState,
-    AudioReceiveStream
-  } from '@discordjs/voice';
-  import { CommandInteraction, GuildMember } from 'discord.js';
-  import { logger } from '../../config/index.js';
-  import { Embeds } from '../../utils/index.js';
-  import { ElevenLabsConversationalAI } from '../elevenlabs/conversationalClient.js';
-  import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
+    AudioReceiveStream,
+    createAudioPlayer,
+    NoSubscriberBehavior,
+    AudioPlayer
+} from '@discordjs/voice';
+import { CommandInteraction, GuildMember } from 'discord.js';
+import { logger } from '../../config/index.js';
+import { Embeds } from '../../utils/index.js';
+import { ElevenLabsConversationalAI } from '../elevenlabs/conversationalClient.js';
+import { VoiceStateManager, VoiceActivityType } from './voiceStateManager.js';
+import { SpeechHandler } from './speech.js';
+import { EventEmitter } from 'events';
 
 /**
  * Manages voice connections for a Discord bot, handling connection and disconnection from voice channels.
@@ -20,7 +25,7 @@ import {
  * @property {CommandInteraction} interaction - The Discord command interaction instance
  * @property {VoiceConnection | null} connection - The current voice connection, if any
  */
-class VoiceConnectionHandler {
+class VoiceConnectionHandler extends EventEmitter {
     private interaction: CommandInteraction;
     private isSpeaking: boolean = false;
     private silenceTimer: NodeJS.Timeout | null = null;
@@ -33,6 +38,8 @@ class VoiceConnectionHandler {
     private currentConnection: VoiceConnection | null = null;
     private readonly isMusic: boolean;
     private stateManager: VoiceStateManager;
+    private speechHandler: SpeechHandler | null = null;
+    private audioPlayer: AudioPlayer;
 
     /**
      * Creates an instance of VoiceConnectionHandler.
@@ -40,9 +47,15 @@ class VoiceConnectionHandler {
      * @param {boolean} isMusic - Whether this connection is for music playback
      */
     constructor(interaction: CommandInteraction, isMusic: boolean = false) {
+        super();
         this.interaction = interaction;
         this.isMusic = isMusic;
         this.stateManager = VoiceStateManager.getInstance();
+        this.audioPlayer = createAudioPlayer({
+            behaviors: {
+                noSubscriber: NoSubscriberBehavior.Play
+            }
+        });
     }
 
     /**
@@ -82,6 +95,14 @@ class VoiceConnectionHandler {
                 // Set appropriate voice state
                 const voiceState = this.isMusic ? VoiceActivityType.MUSIC : VoiceActivityType.SPEECH;
                 this.stateManager.setVoiceState(this.interaction.guildId!, voiceState);
+
+                // Initialize speech handler for voice chat
+                if (!this.isMusic) {
+                    const client = new ElevenLabsConversationalAI(this.audioPlayer);
+                    this.speechHandler = new SpeechHandler(client, connection);
+                    await this.speechHandler.initialize();
+                    connection.subscribe(this.audioPlayer);
+                }
   
                 return connection;
             } catch (error) {
@@ -202,7 +223,7 @@ class VoiceConnectionHandler {
     private handleSpeechStart() {
         this.isSpeaking = true;
         logger.info('Real speech detected');
-        this.emit('realSpeechStart');
+        super.emit('realSpeechStart');
     }
 
     /**
@@ -214,7 +235,7 @@ class VoiceConnectionHandler {
         this.consecutiveNoiseFrames = 0;
         this.silenceTimer = null;
         logger.info('Speech ended');
-        this.emit('realSpeechEnd');
+        super.emit('realSpeechEnd');
     }
 
     /**
@@ -252,6 +273,10 @@ class VoiceConnectionHandler {
     async disconnect(): Promise<boolean> {
         try {
             if (this.currentConnection) {
+                if (this.speechHandler) {
+                    this.speechHandler.cleanup();
+                    this.speechHandler = null;
+                }
                 this.currentConnection.destroy();
                 this.currentConnection = null;
                 // Clear voice state on disconnect
@@ -263,16 +288,6 @@ class VoiceConnectionHandler {
             logger.error(error, 'Error disconnecting from voice channel');
             return false;
         }
-    }
-
-    /**
-     * Emits events for the ConversationalClient to handle.
-     * @private
-     * @param {string} event - The name of the event to emit
-     */
-    private emit(event: string) {
-        logger.info(`Emitting event: ${event}`);
-        // Implement your event emission logic here
     }
 
     /**
