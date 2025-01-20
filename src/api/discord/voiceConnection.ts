@@ -61,12 +61,6 @@ class VoiceConnectionHandler {
 
             const existingConnection = getVoiceConnection(this.interaction.guildId!);
             if (existingConnection) {
-                if (!this.interaction.replied && !this.interaction.deferred) {
-                    await this.interaction.reply({
-                        embeds: [Embeds.error('Error', 'Bot is already in a voice channel.')],
-                        ephemeral: true,
-                    });
-                }
                 return;
             }
 
@@ -89,11 +83,6 @@ class VoiceConnectionHandler {
                 const voiceState = this.isMusic ? VoiceActivityType.MUSIC : VoiceActivityType.SPEECH;
                 this.stateManager.setVoiceState(this.interaction.guildId!, voiceState);
   
-                if (!this.interaction.replied && !this.interaction.deferred) {
-                    await this.interaction.reply({
-                        embeds: [Embeds.success('Connected', "Let's chat!")],
-                    });
-                }
                 return connection;
             } catch (error) {
                 connection.destroy();
@@ -102,12 +91,6 @@ class VoiceConnectionHandler {
 
         } catch (error) {
             logger.error(error, 'Error connecting to voice channel');
-            if (!this.interaction.replied && !this.interaction.deferred) {
-                await this.interaction.reply({
-                    embeds: [Embeds.error('Error', 'An error occurred while connecting to the voice channel.')],
-                    ephemeral: true,
-                });
-            }
         }
     }
 
@@ -258,14 +241,7 @@ class VoiceConnectionHandler {
      * @returns {boolean} True if the member is in a voice channel, false otherwise
      */
     private isUserInVoiceChannel(): boolean {
-        if (!(this.interaction.member instanceof GuildMember && this.interaction.member.voice.channel)) {
-            this.interaction.reply({
-                embeds: [Embeds.error('Error', 'You need to be in a voice channel to use this command.')],
-                ephemeral: true,
-            });
-            return false;
-        }
-        return true;
+        return !!(this.interaction.member instanceof GuildMember && this.interaction.member.voice.channel);
     }
 
     /**

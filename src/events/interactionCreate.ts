@@ -12,11 +12,6 @@ export async function execute(interaction: Interaction) {
   }
 
   try {
-    // Only defer if it hasn't been deferred already
-    if (!interaction.deferred && !interaction.replied) {
-      await interaction.deferReply({ flags: ['Ephemeral'] });
-    }
-    
     await command.execute(interaction);
   } catch (error) {
     console.error(error);

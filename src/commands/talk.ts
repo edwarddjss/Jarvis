@@ -16,6 +16,11 @@ const command: Command = {
     data: data.toJSON(),
     async execute(interaction: ChatInputCommandInteraction): Promise<void> {
         try {
+            // Make initial response non-ephemeral
+            if (!interaction.deferred && !interaction.replied) {
+                await interaction.deferReply({ ephemeral: false });
+            }
+
             const member = interaction.member as GuildMember;
             const stateManager = VoiceStateManager.getInstance();
             
@@ -55,11 +60,14 @@ const command: Command = {
             // Set voice state to speech mode
             stateManager.setVoiceState(interaction.guildId!, VoiceActivityType.SPEECH);
 
-            // Connection successful, VoiceConnectionHandler will handle the success message
+            // Success message
+            await interaction.editReply({
+                content: '🎤 Joined your voice channel! I am now listening and will respond when you speak.'
+            });
         } catch (error) {
             logger.error(error, 'Error in talk command');
             await interaction.editReply({
-                content: '❌ An error occurred while joining the channel.'
+                content: '❌ An error occurred while executing this command.'
             });
         }
     }
