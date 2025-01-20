@@ -70,11 +70,22 @@ export class ElevenLabsConversationalAI {
    * @private
    */
   private cleanup(): void {
+    // Clean up audio stream
     if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
-      this.currentAudioStream.push(null);
+      this.currentAudioStream.removeAllListeners();
+      this.currentAudioStream.end();
       this.currentAudioStream.destroy();
       this.currentAudioStream = null;
     }
+
+    // Stop audio player
+    if (this.audioPlayer) {
+      this.audioPlayer.stop();
+    }
+
+    // Clear the audio buffer queue
+    this.audioBufferQueue = [];
+    this.isProcessing = false;
   }
 
   /**
@@ -82,9 +93,14 @@ export class ElevenLabsConversationalAI {
    * @returns {void}
    */
   public disconnect(): void {
+    // Clean up WebSocket
     if (this.socket?.readyState === WebSocket.OPEN) {
+      this.socket.removeAllListeners();
       this.socket.close();
+      this.socket = null;
     }
+
+    // Clean up audio resources
     this.cleanup();
   }
 
@@ -120,11 +136,30 @@ export class ElevenLabsConversationalAI {
   private initializeAudioStream(): void {
     if (!this.currentAudioStream || this.currentAudioStream.destroyed) {
       this.currentAudioStream = new PassThrough();
-      this.audioPlayer.play(
-        createAudioResource(this.currentAudioStream, {
-          inputType: StreamType.Raw,
-        })
-      );
+      
+      // Handle stream errors
+      this.currentAudioStream.on('error', (error) => {
+        logger.error('Audio stream error:', error);
+        this.cleanup();
+      });
+
+      // Handle stream end
+      this.currentAudioStream.on('end', () => {
+        logger.debug('Audio stream ended');
+        this.cleanup();
+      });
+
+      const resource = createAudioResource(this.currentAudioStream, {
+        inputType: StreamType.Raw,
+      });
+
+      // Handle audio player errors
+      this.audioPlayer.on('error', (error) => {
+        logger.error('Audio player error:', error);
+        this.cleanup();
+      });
+
+      this.audioPlayer.play(resource);
     }
   }
 
@@ -138,64 +173,42 @@ export class ElevenLabsConversationalAI {
 
     this.isProcessing = true;
 
-    while (this.audioBufferQueue.length > 0) {
-      const audioBuffer = this.audioBufferQueue.shift();
-      
-      logger.info(`Processing audio buffer. Queue size: ${this.audioBufferQueue.length}`);
-      
-      if (!audioBuffer) {
-        logger.error('Encountered undefined or null audio buffer');
-        continue;
-      }
-
-      try {
-        logger.info(`Buffer details - Length: ${audioBuffer.length}, Type: ${typeof audioBuffer}`);
-
-        this.initializeAudioStream();
+    try {
+      while (this.audioBufferQueue.length > 0) {
+        const audioBuffer = this.audioBufferQueue.shift();
         
-        let pcmBuffer;
-        try {
-          pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(audioBuffer);
-        } catch (conversionError) {
-          logger.error('FFmpeg conversion error:', {
-            errorMessage: conversionError instanceof Error ? conversionError.message : 'Unknown error',
-            errorStack: conversionError instanceof Error ? conversionError.stack : 'No stack trace',
-            bufferLength: audioBuffer.length,
-            bufferType: typeof audioBuffer,
-            bufferData: audioBuffer.toString('base64').slice(0, 100) // First 100 chars of base64 for context
-          });
-          continue;
-        }
-        
-        if (!pcmBuffer) {
-          logger.error('Conversion resulted in null buffer');
-          continue;
-        }
-
-        if (pcmBuffer.length === 0) {
-          logger.error('Conversion resulted in empty buffer');
+        if (!audioBuffer) {
+          logger.error('Encountered undefined or null audio buffer');
           continue;
         }
 
         try {
-          const writeResult = this.currentAudioStream?.write(pcmBuffer);
-          if (writeResult === false) {
-            logger.error('Failed to write audio buffer to stream');
+          this.initializeAudioStream();
+          
+          const pcmBuffer = await AudioUtils.mono441kHzToStereo48kHz(audioBuffer);
+          
+          if (!pcmBuffer || pcmBuffer.length === 0) {
+            logger.error('Audio conversion failed or resulted in empty buffer');
+            continue;
           }
-        } catch (writeError) {
-          logger.error('Error writing audio buffer:', writeError);
+
+          if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
+            const writeResult = this.currentAudioStream.write(pcmBuffer);
+            if (!writeResult) {
+              // Wait for drain event if buffer is full
+              await new Promise(resolve => this.currentAudioStream!.once('drain', resolve));
+            }
+          }
+
+        } catch (error) {
+          logger.error('Error processing audio buffer:', error);
+          // Continue with next buffer instead of breaking the entire queue
+          continue;
         }
-
-      } catch (error) {
-        logger.error('Unexpected error in audio processing:', {
-          errorMessage: error instanceof Error ? error.message : 'Unknown error',
-          errorStack: error instanceof Error ? error.stack : 'No stack trace',
-          bufferLength: audioBuffer.length,
-        });
       }
+    } finally {
+      this.isProcessing = false;
     }
-
-    this.isProcessing = false;
   }
 
   /**

@@ -146,8 +146,14 @@ class VoiceConnectionHandler {
   }
 
   private setupSpeechConnectionHandlers(connection: VoiceConnection) {
+      // Clean up any existing subscriptions
+      connection.receiver.speaking.removeAllListeners();
+
       connection.receiver.speaking.on('start', (userId) => {
-          this.handleAudioStart(userId);
+          const audioStream = connection.receiver.subscribe(userId);
+          // Set higher limit for listeners
+          audioStream.setMaxListeners(20);
+          this.handleAudioStream(audioStream);
       });
 
       connection.receiver.speaking.on('end', (userId) => {
@@ -169,11 +175,6 @@ class VoiceConnectionHandler {
       connection.on(VoiceConnectionStatus.Destroyed, () => {
           this.currentConnection = null;
       });
-
-      connection.receiver.speaking.on('start', (userId) => {
-          const audioStream = connection.receiver.subscribe(userId);
-          this.handleAudioStream(audioStream);
-      });
   }
 
   /**
@@ -182,6 +183,9 @@ class VoiceConnectionHandler {
    * @param {AudioReceiveStream} audioStream - The audio stream to process
    */
   private handleAudioStream(audioStream: AudioReceiveStream) {
+      // Remove any existing listeners before adding new ones
+      audioStream.removeAllListeners();
+
       audioStream.on('data', (chunk: Buffer) => {
           const audioLevel = this.calculateAudioLevel(chunk);
           this.processAudioLevel(audioLevel);
@@ -189,6 +193,8 @@ class VoiceConnectionHandler {
 
       audioStream.on('end', () => {
           logger.debug('Audio stream ended');
+          // Clean up listeners when stream ends
+          audioStream.removeAllListeners();
       });
   }
 

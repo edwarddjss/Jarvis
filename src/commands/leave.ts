@@ -14,8 +14,6 @@ const data = new SlashCommandBuilder()
 const command: Command = {
     data: data.toJSON(),
     async execute(interaction: ChatInputCommandInteraction): Promise<void> {
-        await interaction.deferReply();
-        
         try {
             const member = interaction.member as GuildMember;
             
