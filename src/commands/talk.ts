@@ -6,6 +6,7 @@ import {
 import { logger } from '../config/logger.js';
 import { Command } from '../types';
 import { VoiceConnectionHandler } from '../api/discord/voiceConnection.js';
+import { VoiceStateManager, VoiceActivityType } from '../api/discord/voiceStateManager.js';
 
 const data = new SlashCommandBuilder()
     .setName('talk')
@@ -16,6 +17,7 @@ const command: Command = {
     async execute(interaction: ChatInputCommandInteraction): Promise<void> {
         try {
             const member = interaction.member as GuildMember;
+            const stateManager = VoiceStateManager.getInstance();
             
             if (!member?.voice?.channel) {
                 await interaction.editReply({
@@ -24,7 +26,23 @@ const command: Command = {
                 return;
             }
 
-            const connectionHandler = new VoiceConnectionHandler(interaction);
+            // Check if music is playing
+            if (stateManager.isPlayingMusic(interaction.guildId!)) {
+                await interaction.editReply({
+                    content: '❌ Cannot start voice chat while music is playing. Please stop the music first.'
+                });
+                return;
+            }
+
+            // Check if already in speech mode
+            if (stateManager.isSpeaking(interaction.guildId!)) {
+                await interaction.editReply({
+                    content: '❌ Already in voice chat mode. Use /leave to exit first.'
+                });
+                return;
+            }
+
+            const connectionHandler = new VoiceConnectionHandler(interaction, false);
             const connection = await connectionHandler.connect();
 
             if (!connection) {
@@ -34,8 +52,11 @@ const command: Command = {
                 return;
             }
 
+            // Set voice state to speech mode
+            stateManager.setVoiceState(interaction.guildId!, VoiceActivityType.SPEECH);
+
             await interaction.editReply({
-                content: '🎤 Joined your voice channel!'
+                content: '🎤 Joined your voice channel! I am now listening and will respond when you speak.'
             });
         } catch (error) {
             logger.error(error, 'Error in talk command');

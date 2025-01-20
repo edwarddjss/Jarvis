@@ -6,6 +6,7 @@ import {
 import { logger } from '../config/logger.js';
 import { Command } from '../types';
 import { MusicHandler } from '../api/discord/musicHandler.js';
+import { VoiceStateManager } from '../api/discord/voiceStateManager.js';
 
 const data = new SlashCommandBuilder()
     .setName('leave')
@@ -16,6 +17,7 @@ const command: Command = {
     async execute(interaction: ChatInputCommandInteraction): Promise<void> {
         try {
             const member = interaction.member as GuildMember;
+            const stateManager = VoiceStateManager.getInstance();
             
             if (!member?.voice?.channel) {
                 await interaction.editReply({
@@ -24,11 +26,15 @@ const command: Command = {
                 return;
             }
 
+            // Stop music if it's playing
             const musicHandler = MusicHandler.getInstance();
             musicHandler.stop(interaction.guildId!);
 
+            // Clear voice state
+            stateManager.clearState(interaction.guildId!);
+
             await interaction.editReply({
-                content: '👋 Left the voice channel'
+                content: '👋 Left the voice channel!'
             });
         } catch (error) {
             logger.error(error, 'Error in leave command');

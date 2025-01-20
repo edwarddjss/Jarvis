@@ -11,16 +11,19 @@ import { CommandInteraction, GuildMember } from 'discord.js';
 import { logger } from '../../config/index.js';
 import { Embeds } from '../../utils/index.js';
 import { ElevenLabsConversationalAI } from '../elevenlabs/conversationalClient.js';
+import { EventEmitter } from 'events';
+import { createAudioPlayer, AudioPlayer, NoSubscriberBehavior, PassThrough } from '@discordjs/voice';
 
 /**
 * Manages voice connections for a Discord bot, handling connection and disconnection from voice channels.
 * Includes sophisticated voice activity detection and audio processing.
 *
 * @class VoiceConnectionHandler
+* @extends EventEmitter
 * @property {CommandInteraction} interaction - The Discord command interaction instance
 * @property {VoiceConnection | null} connection - The current voice connection, if any
 */
-class VoiceConnectionHandler {
+class VoiceConnectionHandler extends EventEmitter {
   private interaction: CommandInteraction;
   private isSpeaking: boolean = false;
   private silenceTimer: NodeJS.Timeout | null = null;
@@ -32,6 +35,11 @@ class VoiceConnectionHandler {
   private readonly REQUIRED_NOISE_FRAMES = 3; // Number of consecutive frames needed to confirm speech
   private currentConnection: VoiceConnection | null = null;
   private isForMusic: boolean = false;
+  private conversationalAI: ElevenLabsConversationalAI | null = null;
+  private currentAudioStream: PassThrough | null = null;
+  private audioBufferQueue: Buffer[] = [];
+  private isProcessing: boolean = false;
+  private audioPlayer: AudioPlayer;
 
   /**
    * Creates an instance of VoiceConnectionHandler.
@@ -39,8 +47,17 @@ class VoiceConnectionHandler {
    * @param {boolean} isForMusic - Whether this connection is for music playback
    */
   constructor(interaction: CommandInteraction, isForMusic: boolean = false) {
+      super();
       this.interaction = interaction;
       this.isForMusic = isForMusic;
+      this.audioPlayer = createAudioPlayer({
+          behaviors: {
+              noSubscriber: NoSubscriberBehavior.Play
+          }
+      });
+      
+      // Set higher limit for listeners
+      this.audioPlayer.setMaxListeners(20);
   }
 
   /**
@@ -189,6 +206,11 @@ class VoiceConnectionHandler {
       audioStream.on('data', (chunk: Buffer) => {
           const audioLevel = this.calculateAudioLevel(chunk);
           this.processAudioLevel(audioLevel);
+          
+          // Send audio data to ElevenLabs if we're in speech mode
+          if (!this.isForMusic && this.isSpeaking && this.conversationalAI) {
+              this.conversationalAI.appendInputAudio(chunk);
+          }
       });
 
       audioStream.on('end', () => {
@@ -253,6 +275,14 @@ class VoiceConnectionHandler {
       this.isSpeaking = true;
       logger.info('Real speech detected');
       this.emit('realSpeechStart');
+      
+      // Initialize ElevenLabs client if not already done
+      if (!this.conversationalAI && !this.isForMusic) {
+          this.conversationalAI = new ElevenLabsConversationalAI(this.audioPlayer);
+          this.conversationalAI.connect().catch(error => {
+              logger.error('Failed to connect to ElevenLabs:', error);
+          });
+      }
   }
 
   /**
@@ -265,24 +295,6 @@ class VoiceConnectionHandler {
       this.silenceTimer = null;
       logger.info('Speech ended');
       this.emit('realSpeechEnd');
-  }
-
-  /**
-   * Handles initial audio detection.
-   * @private
-   * @param {string} userId - The ID of the user who started speaking
-   */
-  private handleAudioStart(userId: string) {
-      logger.debug(`Audio started from user: ${userId}`);
-  }
-
-  /**
-   * Handles audio stream end.
-   * @private
-   * @param {string} userId - The ID of the user who stopped speaking
-   */
-  private handleAudioEnd(userId: string) {
-      logger.debug(`Audio ended from user: ${userId}`);
   }
 
   /**
@@ -322,6 +334,34 @@ class VoiceConnectionHandler {
    */
   public isCurrentlySpeaking(): boolean {
       return this.isSpeaking;
+  }
+
+  private cleanup(): void {
+      // Clean up audio stream
+      if (this.currentAudioStream && !this.currentAudioStream.destroyed) {
+          this.currentAudioStream.removeAllListeners();
+          this.currentAudioStream.end();
+          this.currentAudioStream.destroy();
+          this.currentAudioStream = null;
+      }
+
+      // Clean up ElevenLabs client
+      if (this.conversationalAI) {
+          this.conversationalAI.disconnect();
+          this.conversationalAI = null;
+      }
+
+      // Stop audio player
+      if (this.audioPlayer) {
+          this.audioPlayer.stop();
+      }
+
+      // Clear the audio buffer queue
+      this.audioBufferQueue = [];
+      this.isProcessing = false;
+
+      // Remove all event listeners
+      this.removeAllListeners();
   }
 }
 
