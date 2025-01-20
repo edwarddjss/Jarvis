@@ -78,22 +78,6 @@ export class ElevenLabsConversationalAI {
       this.socket.on('open', () => {
         logger.info('Successfully connected to ElevenLabs Conversational WebSocket.');
         clearTimeout(connectionTimeout);
-        
-        // Send initial configuration
-        const initMessage = {
-          text: "Hello! I'm here to help. What would you like to talk about?",
-          model_id: process.env.AGENT_ID,
-          voice_settings: {
-            stability: 0.5,
-            similarity_boost: 0.75
-          }
-        };
-        
-        if (this.socket?.readyState === WebSocket.OPEN) {
-          this.socket.send(JSON.stringify(initMessage));
-          logger.info('Sent initial configuration');
-        }
-        
         resolve();
       });
 
@@ -170,20 +154,36 @@ export class ElevenLabsConversationalAI {
       if (!this.isListening) {
         this.isListening = true;
         this.lastTranscriptTime = Date.now();
+
+        // Send initial configuration if this is the start of conversation
+        if (!this.currentConversationId) {
+          const config = {
+            text: "Hello! I'm here to help. What would you like to talk about?",
+            model_id: process.env.AGENT_ID,
+            voice_settings: {
+              stability: 0.5,
+              similarity_boost: 0.75
+            },
+            optimize_streaming_latency: 3
+          };
+          this.socket?.send(JSON.stringify(config));
+        }
       }
 
-      // Format matches ElevenLabs WebSocket API
-      const audioMessage = {
-        audio: validBuffer.toString('base64'),
-        model_id: process.env.AGENT_ID,
-        voice_settings: {
-          stability: 0.5,
-          similarity_boost: 0.75
+      // Send audio in correct format
+      const message = {
+        type: "audio",
+        input_audio: {
+          data: validBuffer.toString('base64'),
+          type: "audio/pcm",
+          sampling_rate: 44100,
+          bit_depth: 16,
+          channels: 1
         }
       };
 
       if (this.socket?.readyState === WebSocket.OPEN) {
-        this.socket.send(JSON.stringify(audioMessage));
+        this.socket.send(JSON.stringify(message));
       }
 
       // Check for transcript timeout
@@ -195,7 +195,6 @@ export class ElevenLabsConversationalAI {
       }
     } catch (error) {
       logger.error('Error sending audio chunk:', error);
-      // Don't throw - we want to keep the connection alive even if one chunk fails
     }
   }
 
@@ -324,11 +323,14 @@ export class ElevenLabsConversationalAI {
         return;
       }
 
+      // Log that we received audio
+      logger.debug('Received audio response, length:', audioBuffer.length);
+
       this.audioBufferQueue.push(audioBuffer);
       await this.processAudioQueue();
     } catch (error) {
       logger.error('Error in handleAudio:', error);
-      throw error; // Let caller handle it
+      throw error;
     }
   }
 
@@ -410,45 +412,36 @@ export class ElevenLabsConversationalAI {
       // Log raw message for debugging
       logger.debug('Raw WebSocket message:', rawMessage);
 
-      const event = JSON.parse(rawMessage) as ElevenLabsEvent;
+      const event = JSON.parse(rawMessage);
       
-      // Validate event has a type
-      if (!event || !event.type) {
-        logger.warn('Received event without type:', event);
-        return;
-      }
-
-      switch (event.type) {
-        case 'conversation_initiation_metadata':
-          this.handleConversationMetadata(event);
-          break;
-        case 'agent_response':
-          this.handleAgentResponse(event);
-          break;
-        case 'user_transcript':
-          this.handleUserTranscript(event);
-          break;
-        case 'audio':
-          this.handleAudio(event).catch(error => {
-            logger.error('Error handling audio event:', error);
-          });
-          break;
-        case 'interruption':
-          this.handleInterruption();
-          break;
-        case 'ping':
-          // Handle ping event silently
-          break;
-        case 'error':
-          logger.error('ElevenLabs error:', event.error_event?.error_message || 'Unknown error');
-          break;
-        default:
-          logger.warn('Unknown event type:', event.type, 'Full event:', event);
+      // Handle different response formats
+      if (event.audio) {
+        // Direct audio response
+        this.handleAudio({ 
+          type: 'audio',
+          audio_event: {
+            audio_base_64: event.audio,
+            event_id: 0
+          }
+        }).catch(error => {
+          logger.error('Error handling audio response:', error);
+        });
+      } else if (event.type === 'audio') {
+        // Typed audio response
+        this.handleAudio(event).catch(error => {
+          logger.error('Error handling audio event:', error);
+        });
+      } else if (event.error) {
+        // Error response
+        logger.error('ElevenLabs error:', event.error);
+      } else if (event.text) {
+        // Text response
+        logger.info('Received text response:', event.text);
+      } else {
+        logger.warn('Unknown event format:', event);
       }
     } catch (error) {
       logger.error('Error parsing WebSocket message:', error, 'Raw message:', message.toString());
-      
-      // Try to reconnect if we're getting parse errors
       this.handleWebSocketError();
     }
   }
